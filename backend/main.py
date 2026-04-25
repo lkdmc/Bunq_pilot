@@ -363,7 +363,7 @@ async def api_sync_transactions():
     """Pull latest transactions from bunq and store in DB."""
     try:
         new_count = sync_from_bunq(limit=50)
-        rows = get_all_transactions(limit=20)
+        rows = get_all_transactions(limit=50)
         txs = [
             {"id": r[0], "date": r[1], "merchant": r[2], "desc": r[3],
              "amount": str(r[4]), "currency": r[5], "category": r[6]}
@@ -377,7 +377,7 @@ async def api_sync_transactions():
 @app.get("/api/transactions")
 async def api_transactions():
     sync_from_bunq(limit=50)
-    rows = get_all_transactions(limit=20)
+    rows = get_all_transactions(limit=50)
     if rows:
         return [
             {"id": r[0], "date": r[1], "merchant": r[2], "desc": r[3],

@@ -66,6 +66,19 @@ export default function App() {
       .then(r => r.json())
       .then(d => { if (d.amount != null) { setBudget(d.amount); localStorage.setItem('monthly_budget', d.amount); } })
       .catch(() => {});
+
+    // Poll for new transactions every 30 seconds
+    const pollInterval = setInterval(() => {
+      fetch(`${API_BASE}/api/transactions/sync`, { method: 'POST' })
+        .then(r => r.json())
+        .then(d => {
+          if (d.synced > 0) {
+            setTransactions(Array.isArray(d.transactions) ? d.transactions : []);
+          }
+        })
+        .catch(() => {});
+    }, 30000);
+    return () => clearInterval(pollInterval);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const subsLoadedRef = useRef(false);
