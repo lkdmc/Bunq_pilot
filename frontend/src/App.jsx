@@ -292,7 +292,7 @@ export default function App() {
       const monthName = now.toLocaleString('default', { month: 'long' });
 
       return (
-        <div className="absolute inset-0 z-50 bg-black flex flex-col overflow-y-auto no-scrollbar pb-10">
+        <div className="absolute inset-0 z-50 bg-black flex flex-col overflow-y-auto no-scrollbar pb-24">
           {closeBtn}
           {backBtn}
           <div className="px-4 pt-12 pb-5 border-b border-[#1C1C1E]">
@@ -495,7 +495,7 @@ export default function App() {
       const maxCat = topCats[0]?.[1] || 1;
 
       return (
-        <div className="absolute inset-0 z-50 bg-black flex flex-col overflow-y-auto no-scrollbar pb-10">
+        <div className="absolute inset-0 z-50 bg-black flex flex-col overflow-y-auto no-scrollbar pb-24">
           {closeBtn}
           {backBtn}
           <div className="px-4 pt-12 pb-5 border-b border-[#1C1C1E]">
