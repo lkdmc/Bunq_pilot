@@ -4,20 +4,24 @@ Run: python send_transactions.py
 """
 
 import json
-import uuid
+import os
 import base64
 import requests
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.backends import default_backend
+from dotenv import load_dotenv
 
-SESSION_TOKEN = "REDACTED_SESSION_TOKEN"
-USER_ID = "REDACTED_USER_ID"
-MONETARY_ACCOUNT_ID = "REDACTED_ACCOUNT_ID"
+load_dotenv()
+
+SESSION_TOKEN = os.getenv("BUNQ_SESSION_TOKEN", "")
+USER_ID = os.getenv("BUNQ_USER_ID", "")
+MONETARY_ACCOUNT_ID = os.getenv("BUNQ_MONETARY_ACCOUNT_ID", "")
+PRIVATE_KEY_PATH = os.getenv("BUNQ_PRIVATE_KEY_PATH", "private.pem")
 BASE_URL = "https://public-api.sandbox.bunq.com/v1"
 
 # ── Load private key ──────────────────────────────────
-with open("private.pem", "rb") as f:
+with open(PRIVATE_KEY_PATH, "rb") as f:
     private_key_pem = f.read().decode("utf-8")
 
 private_key = serialization.load_pem_private_key(
