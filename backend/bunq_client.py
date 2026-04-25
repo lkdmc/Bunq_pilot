@@ -16,6 +16,7 @@ def setup_bunq():
     try:
         if os.path.exists("bunq.conf"):
             api_context = ApiContext.restore("bunq.conf")
+            api_context.save("bunq.conf")  # Persist refreshed session token
         else:
             api_context = ApiContext.create(ApiEnvironmentType.SANDBOX, api_key, "Bunq Pilot")
             api_context.save("bunq.conf")
@@ -25,6 +26,11 @@ def setup_bunq():
     except Exception as e:
         print(f"Failed to setup bunq API: {e}")
         return False
+
+def _reset_bunq():
+    """Force re-initialization on next API call (e.g. after session expiry)."""
+    global _bunq_ready
+    _bunq_ready = False
 
 def _get_monetary_account_class():
     import bunq.sdk.model.generated.endpoint as ep
@@ -66,6 +72,7 @@ def get_balance():
         return {"balance": float(bal.value), "currency": bal.currency}
     except Exception as e:
         print(f"Error fetching balance from SDK: {e}")
+        _reset_bunq()
         return None
 
 def create_request_inquiry(amount: str, description: str, counterparty_email: str) -> int:
@@ -109,4 +116,5 @@ def get_recent_transactions(limit=10):
         return formatted_tx
     except Exception as e:
         print(f"Error fetching bunq transactions: {e}")
+        _reset_bunq()  # Force re-init on next call in case of session expiry
         return []
