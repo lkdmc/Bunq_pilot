@@ -23,6 +23,7 @@ export default function App() {
   const [subsLoading, setSubsLoading] = useState(false);
   const [forecast, setForecast] = useState(null);
   const [forecastLoading, setForecastLoading] = useState(false);
+  const [accountBalance, setAccountBalance] = useState(null);
   const chatBoxRef = useRef(null);
 
   useEffect(() => {
@@ -30,6 +31,11 @@ export default function App() {
       .then(res => res.json())
       .then(data => setTransactions(data))
       .catch(err => console.error('Failed to fetch transactions:', err));
+
+    fetch('http://127.0.0.1:8000/api/balance')
+      .then(res => res.json())
+      .then(data => { if (data.balance !== null) setAccountBalance(data.balance); })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -127,7 +133,9 @@ export default function App() {
       <div className="mb-8">
         <div className="flex justify-between items-end mb-3">
           <h2 className="text-lg font-bold">Bank Accounts</h2>
-          <span className="text-sm font-semibold text-gray-300">€ 2,450.00</span>
+          <span className="text-sm font-semibold text-gray-300">
+            {accountBalance !== null ? `€ ${accountBalance.toLocaleString('nl-NL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}
+          </span>
         </div>
         <div className="bunq-card p-4">
           <div className="flex justify-between items-center mb-4">
@@ -140,7 +148,9 @@ export default function App() {
                 <p className="text-xs text-gray-400">NL19 BUNQ 2106 2462 77</p>
               </div>
             </div>
-            <p className="text-lg font-bold text-white">€ 2,450.00</p>
+            <p className="text-lg font-bold text-white">
+              {accountBalance !== null ? `€ ${accountBalance.toLocaleString('nl-NL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}
+            </p>
           </div>
           <p className="text-sm text-blue-500 font-medium">Add an Extra Bank Account</p>
         </div>
