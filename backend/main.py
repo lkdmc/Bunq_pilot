@@ -4,20 +4,38 @@ import os
 import re
 from datetime import datetime
 from collections import deque
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
+from typing import List, Dict, Any
 import anthropic
 from dotenv import load_dotenv
+from bunq_client import get_recent_transactions
 
 load_dotenv()
 
 app = FastAPI()
 
-# ── Config ────────────────────────────────────────────
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# ── In-memory log buffer ──────────────────────────────
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
+
+FINN_SYSTEM_PROMPT = (
+    "You are bunq's personal AI financial assistant, 'Finn'. "
+    "You are a trendy and smart financial manager for the younger generation. "
+    "Analyze the user's transaction history to answer their questions. "
+    "Avoid long, boring explanations. Provide short, clear, fact-based practical saving tips "
+    "(maximum 3 sentences) that hit the nail on the head. Use emojis appropriately."
+)
+
 log_buffer = deque(maxlen=100)
 
 def log(msg: str):
@@ -49,20 +67,17 @@ def init_db():
 
 init_db()
 
-# ── Parse date from description ───────────────────────
+# ── Helpers ───────────────────────────────────────────
 def parse_date_from_description(description: str, fallback: str) -> str:
-    """
-    Try to extract a date like DD-MM-YYYY from the description.
-    e.g. 'Albert Heijn 08-01-2026' -> '2026-01-08'
-    """
     match = re.search(r'(\d{2})-(\d{2})-(\d{4})', description)
     if match:
         day, month, year = match.groups()
         return f"{year}-{month}-{day}"
     return fallback[:10]
 
-# ── Categorize with Claude ────────────────────────────
 def categorize_transaction(description: str, counterparty: str, amount: float) -> str:
+    if not anthropic_client:
+        return "Other"
     prompt = f"""Classify the following bank transaction into ONE category. Reply with only the category name.
 
 Categories: Food, Entertainment, Subscription, Transport, Shopping, Health, Utilities, Transfer, Other
@@ -72,7 +87,6 @@ Counterparty: {counterparty}
 Amount: {amount} EUR
 
 Category:"""
-
     message = anthropic_client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=20,
@@ -80,26 +94,24 @@ Category:"""
     )
     return message.content[0].text.strip()
 
-# ── Save Transaction ──────────────────────────────────
 def save_transaction(tx_id, date_str, amount, currency, description, counterparty, category):
     dt = datetime.fromisoformat(date_str[:10])
     conn = sqlite3.connect("spending.db")
     c = conn.cursor()
     c.execute("""
-        INSERT OR IGNORE INTO transactions 
+        INSERT OR IGNORE INTO transactions
         (id, date, amount, currency, description, counterparty, category, year, month)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (tx_id, date_str[:10], amount, currency, description, counterparty, category, dt.year, dt.month))
     conn.commit()
     conn.close()
 
-# ── Monthly Summary ───────────────────────────────────
 def get_monthly_summary(year: int, month: int) -> dict:
     conn = sqlite3.connect("spending.db")
     c = conn.cursor()
     c.execute("""
-        SELECT category, SUM(amount) 
-        FROM transactions 
+        SELECT category, SUM(amount)
+        FROM transactions
         WHERE year=? AND month=? AND amount < 0
         GROUP BY category
     """, (year, month))
@@ -107,10 +119,8 @@ def get_monthly_summary(year: int, month: int) -> dict:
     conn.close()
     return {row[0]: abs(row[1]) for row in rows}
 
-# ── Generate Report ───────────────────────────────────
 def generate_report(year: int, month: int) -> str:
     current = get_monthly_summary(year, month)
-
     if not current:
         return f"No spending data found for {year}-{month:02d}."
 
@@ -119,7 +129,6 @@ def generate_report(year: int, month: int) -> str:
     previous = get_monthly_summary(prev_year, prev_month)
 
     lines = [f"Monthly Spending Report — {year}/{month:02d}", "=" * 42]
-
     for category, amount in sorted(current.items(), key=lambda x: -x[1]):
         line = f"  {category:<16} €{amount:>8.2f}"
         if category in previous:
@@ -137,22 +146,10 @@ def generate_report(year: int, month: int) -> str:
     total = sum(current.values())
     lines.append("=" * 42)
     lines.append(f"  {'TOTAL':<16} €{total:>8.2f}")
-
     if not previous:
         lines.append("\n  No previous month data — comparison available next month.")
-
     return "\n".join(lines)
 
-# ── Available months (for nav) ────────────────────────
-def get_available_months() -> list[tuple[int, int]]:
-    conn = sqlite3.connect("spending.db")
-    c = conn.cursor()
-    c.execute("SELECT DISTINCT year, month FROM transactions ORDER BY year DESC, month DESC")
-    rows = c.fetchall()
-    conn.close()
-    return rows
-
-# ── Get All Transactions ──────────────────────────────
 def get_all_transactions(limit=50):
     conn = sqlite3.connect("spending.db")
     c = conn.cursor()
@@ -166,16 +163,22 @@ def get_all_transactions(limit=50):
     conn.close()
     return rows
 
+def get_available_months() -> list[tuple[int, int]]:
+    conn = sqlite3.connect("spending.db")
+    c = conn.cursor()
+    c.execute("SELECT DISTINCT year, month FROM transactions ORDER BY year DESC, month DESC")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
 # ── Webhook ───────────────────────────────────────────
 @app.post("/webhook")
 async def receive_webhook(request: Request):
     body = await request.json()
     log(f"Webhook received: {json.dumps(body)[:150]}")
-
     try:
         notification = body.get("NotificationUrl", {})
         obj = notification.get("object", {})
-
         if "Payment" in obj:
             payment = obj["Payment"]
             tx_id = str(payment.get("id"))
@@ -185,24 +188,73 @@ async def receive_webhook(request: Request):
             currency = amount_obj.get("currency", "EUR")
             description = payment.get("description", "")
             counterparty = payment.get("counterparty_alias", {}).get("display_name", "")
-
             if amount < 0:
-                # Parse date from description if available
                 date_str = parse_date_from_description(description, created_str)
                 log(f"Outgoing payment: {description} | {counterparty} | €{amount} | date: {date_str}")
                 category = categorize_transaction(description, counterparty, amount)
                 log(f"Category: {category}")
                 save_transaction(tx_id, date_str, amount, currency, description, counterparty, category)
-                log(f"Saved to DB.")
+                log("Saved to DB.")
             else:
                 log(f"Incoming payment skipped: €{amount} from {counterparty}")
-
     except Exception as e:
         log(f"ERROR: {e}")
-
     return {"status": "ok"}
 
-# ── Dashboard ─────────────────────────────────────────
+# ── React API ─────────────────────────────────────────
+@app.get("/api/transactions")
+async def api_transactions():
+    rows = get_all_transactions(limit=20)
+    if rows:
+        return [
+            {"date": r[0], "merchant": r[1], "desc": r[2],
+             "amount": str(r[3]), "currency": r[4], "category": r[5]}
+            for r in rows
+        ]
+    return get_recent_transactions()
+
+class MessageInput(BaseModel):
+    message: str
+    history: List[Dict[str, Any]] = []
+
+@app.post("/api/chat")
+async def chat_with_finn(input_data: MessageInput):
+    if not anthropic_client:
+        raise HTTPException(status_code=500, detail="Anthropic API Key not configured.")
+
+    rows = get_all_transactions(limit=20)
+    if rows:
+        transactions_text = "\n".join(
+            f"- {r[0]} | {r[1]} ({r[2]}): €{r[3]} {r[4]} [{r[5]}]"
+            for r in rows
+        )
+    else:
+        live = get_recent_transactions()
+        transactions_text = "\n".join(
+            f"- {t['date']} | {t['merchant']} ({t['desc']}): {t['amount']}{t['currency']}"
+            for t in live
+        )
+
+    context_prompt = (
+        f"[User Transaction History]\n{transactions_text}\n\n"
+        f"Please refer to the recent transaction history above to answer the user's question. "
+        f"Question: {input_data.message}"
+    )
+    messages = [{"role": m["role"], "content": m["content"]} for m in input_data.history]
+    messages.append({"role": "user", "content": context_prompt})
+
+    try:
+        response = anthropic_client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=FINN_SYSTEM_PROMPT,
+            messages=messages
+        )
+        return {"response": response.content[0].text}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ── Debug dashboard (server-side HTML) ───────────────
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
     now = datetime.now()
@@ -228,7 +280,7 @@ def dashboard():
     html = f"""<!DOCTYPE html>
 <html>
 <head>
-    <title>bunq Spending Tracker</title>
+    <title>bunq Spending Tracker — Debug</title>
     <meta http-equiv="refresh" content="5">
     <style>
         * {{ box-sizing: border-box; margin: 0; padding: 0; }}
@@ -253,8 +305,8 @@ def dashboard():
     </style>
 </head>
 <body>
-    <h1>💳 bunq Spending Tracker</h1>
-    <p class="subtitle"><span class="dot"></span>Live — auto-refreshes every 5 seconds</p>
+    <h1>bunq Spending Tracker — Debug</h1>
+    <p class="subtitle"><span class="dot"></span>Live — auto-refreshes every 5 seconds &nbsp;|&nbsp; React app: <a href="http://localhost:5173" style="color:#00d4aa">localhost:5173</a></p>
 
     <div class="month-nav">
         <span style="color:#555; font-size:12px; padding: 4px 0;">Jump to report:</span>
@@ -263,22 +315,22 @@ def dashboard():
             f'{datetime(y, m, 1).strftime("%b %Y")}</a>'
             for y, m in available_months
         ) or '<span style="color:#444; font-size:12px;">No data yet</span>'}
-        <a class="month-btn" href="/advice" style="margin-left:12px; border-color:#555;">💡 Advice</a>
+        <a class="month-btn" href="/advice" style="margin-left:12px; border-color:#555;">Advice</a>
     </div>
 
     <div class="grid">
         <div class="card">
-            <h2>📊 {now.strftime("%B %Y")} Report</h2>
+            <h2>{now.strftime("%B %Y")} Report</h2>
             <pre>{report}</pre>
         </div>
         <div class="card">
-            <h2>🔴 Live Logs</h2>
+            <h2>Live Logs</h2>
             <div class="log">{logs_html if logs_html else "Waiting for events..."}</div>
         </div>
     </div>
 
     <div class="card">
-        <h2>📋 Recent Transactions</h2>
+        <h2>Recent Transactions</h2>
         <table>
             <tr><th>Date</th><th>Counterparty</th><th>Description</th><th>Amount</th><th>Category</th></tr>
             {tx_rows if tx_rows else '<tr><td colspan="5" style="color:#444; padding:20px">No transactions yet.</td></tr>'}
@@ -288,7 +340,6 @@ def dashboard():
 </html>"""
     return html
 
-# ── Report page for any month ─────────────────────────
 @app.get("/report-page/{year}/{month}", response_class=HTMLResponse)
 def report_page(year: int, month: int):
     report = generate_report(year, month)
@@ -303,13 +354,15 @@ def report_page(year: int, month: int):
     </style>
 </head>
 <body>
-    <a href="/">← Back to dashboard</a>
-    <br><br>
+    <a href="/">← Back to dashboard</a><br><br>
     <pre>{report}</pre>
 </body>
 </html>"""
 
-# ── Advice ───────────────────────────────────────────
+@app.get("/report/{year}/{month}")
+def get_report(year: int, month: int):
+    return {"report": generate_report(year, month)}
+
 @app.get("/advice", response_class=HTMLResponse)
 def get_advice():
     now = datetime.now()
@@ -319,13 +372,13 @@ def get_advice():
         months = get_available_months()
         if months:
             summary = get_monthly_summary(months[0][0], months[0][1])
-            label = f"{datetime(months[0][0], months[0][1], 1).strftime('%B %Y')}"
+            label = datetime(months[0][0], months[0][1], 1).strftime("%B %Y")
         else:
             label = None
     else:
         label = now.strftime("%B %Y")
 
-    if not summary:
+    if not summary or not anthropic_client:
         advice_html = "<p style='color:#888'>No spending data available yet.</p>"
     else:
         total = sum(summary.values())
@@ -350,10 +403,10 @@ Rules:
         )
         raw = message.content[0].text.strip()
         log(f"Advice generated for {label}")
-
         tips = [line.strip() for line in raw.split("\n") if line.strip()]
         advice_html = "\n".join(
-            f'<div class="tip"><span class="tip-num">{i+1}</span><span class="tip-text">{tip.lstrip("0123456789. ")}</span></div>'
+            f'<div class="tip"><span class="tip-num">{i+1}</span>'
+            f'<span class="tip-text">{tip.lstrip("0123456789. ")}</span></div>'
             for i, tip in enumerate(tips[:3])
         )
 
@@ -369,20 +422,12 @@ Rules:
         .tip-num {{ color: #00d4aa; font-size: 22px; font-weight: bold; min-width: 24px; }}
         .tip-text {{ color: #ccc; font-size: 14px; line-height: 1.7; }}
         a {{ color: #00d4aa; font-size: 13px; text-decoration: none; }}
-        a:hover {{ text-decoration: underline; }}
     </style>
 </head>
 <body>
-    <h1>💡 Saving Tips</h1>
+    <h1>Saving Tips</h1>
     <p class="sub">Based on {label or "available"} spending data</p>
     {advice_html}
-    <br>
-    <a href="/">← Back to dashboard</a>
+    <br><a href="/">← Back to dashboard</a>
 </body>
 </html>"""
-
-# ── Report API ────────────────────────────────────────
-@app.get("/report/{year}/{month}")
-def get_report(year: int, month: int):
-    report = generate_report(year, month)
-    return {"report": report}

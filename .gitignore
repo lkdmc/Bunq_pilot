@@ -1,10 +1,19 @@
+# env & secrets
 .env
 private.pem
 private_key.pem
 public_key.pem
+bunq.conf
+
+# DB
 spending.db
-device_token.json
+
+# Python
 __pycache__/
 *.pyc
 venv/
 .venv/
+
+# Node
+frontend/node_modules/
+frontend/dist/
