@@ -29,6 +29,7 @@ export default function App() {
   const [addMoneyDesc, setAddMoneyDesc] = useState('');
   const [addMoneyLoading, setAddMoneyLoading] = useState(false);
   const [addMoneyResult, setAddMoneyResult] = useState(null);
+  const [txLimit, setTxLimit] = useState(5);
   const chatBoxRef = useRef(null);
 
   useEffect(() => {
@@ -192,7 +193,7 @@ export default function App() {
           <svg className="w-5 h-5 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
         </div>
         <div className="bunq-card flex flex-col gap-1 p-2">
-          {transactions.slice(0, 5).map((t, i) => {
+          {transactions.slice(0, txLimit).map((t, i) => {
             const isExpense = t.amount.startsWith('-');
             const { icon, bg, text } = getIconForMerchant(t.merchant);
             return (
@@ -211,60 +212,16 @@ export default function App() {
             );
           })}
           {transactions.length === 0 && <div className="p-4 text-center text-gray-500 text-sm">No recent transactions</div>}
+          {transactions.length > 5 && (
+            <button
+              onClick={() => setTxLimit(txLimit === 5 ? transactions.length : 5)}
+              className="w-full py-2.5 text-xs font-semibold text-blue-400 hover:text-blue-300 transition border-t border-gray-800 mt-1"
+            >
+              {txLimit === 5 ? `View all ${transactions.length} transactions` : 'Show less'}
+            </button>
+          )}
         </div>
       </div>
-
-      {/* Add Money modal */}
-      {showAddMoney && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center" onClick={() => setShowAddMoney(false)}>
-          <div className="absolute inset-0 bg-black/60" />
-          <div className="relative w-full max-w-[430px] bg-[#1C1C1E] rounded-t-2xl p-6 pb-8" onClick={e => e.stopPropagation()}>
-            <div className="w-10 h-1 bg-gray-600 rounded-full mx-auto mb-5" />
-            <h2 className="text-lg font-bold text-white mb-1">Add Money</h2>
-            <p className="text-xs text-gray-400 mb-5">Sends a payment request to sugardaddy@bunq.com</p>
-
-            <label className="text-xs text-gray-400 mb-1 block">Amount (EUR)</label>
-            <div className="flex items-center bg-[#2C2C2E] rounded-xl px-4 py-3 mb-4">
-              <span className="text-gray-400 mr-2 text-lg">€</span>
-              <input
-                type="number"
-                min="0.01"
-                step="0.01"
-                placeholder="0.00"
-                value={addMoneyAmount}
-                onChange={e => setAddMoneyAmount(e.target.value)}
-                className="flex-1 bg-transparent outline-none text-white text-lg placeholder-gray-600"
-                autoFocus
-              />
-            </div>
-
-            <label className="text-xs text-gray-400 mb-1 block">Description</label>
-            <div className="flex items-center bg-[#2C2C2E] rounded-xl px-4 py-3 mb-6">
-              <input
-                type="text"
-                placeholder="Request money"
-                value={addMoneyDesc}
-                onChange={e => setAddMoneyDesc(e.target.value)}
-                className="flex-1 bg-transparent outline-none text-white text-sm placeholder-gray-600"
-              />
-            </div>
-
-            {addMoneyResult && (
-              <p className={`text-sm text-center mb-4 ${addMoneyResult.ok ? 'text-green-400' : 'text-red-400'}`}>
-                {addMoneyResult.ok ? '✓ ' : '✗ '}{addMoneyResult.msg}
-              </p>
-            )}
-
-            <button
-              onClick={handleAddMoney}
-              disabled={addMoneyLoading || !addMoneyAmount}
-              className="w-full py-3.5 rounded-xl bg-purple-600 text-white font-bold text-sm disabled:opacity-50 transition"
-            >
-              {addMoneyLoading ? 'Sending...' : 'Send Request'}
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 
@@ -485,6 +442,57 @@ export default function App() {
     ai: renderChat,
   };
 
+  const renderAddMoneyModal = () => (
+    <div className="fixed inset-0 z-[100] flex items-end justify-center" onClick={() => setShowAddMoney(false)}>
+      <div className="absolute inset-0 bg-black/60" />
+      <div className="relative w-full max-w-[430px] bg-[#1C1C1E] rounded-t-2xl p-6 pb-10" onClick={e => e.stopPropagation()}>
+        <div className="w-10 h-1 bg-gray-600 rounded-full mx-auto mb-5" />
+        <h2 className="text-lg font-bold text-white mb-1">Add Money</h2>
+        <p className="text-xs text-gray-400 mb-5">Sends a payment request to sugardaddy@bunq.com</p>
+
+        <label className="text-xs text-gray-400 mb-1 block">Amount (EUR)</label>
+        <div className="flex items-center bg-[#2C2C2E] rounded-xl px-4 py-3 mb-4">
+          <span className="text-gray-400 mr-2 text-lg">€</span>
+          <input
+            type="number"
+            min="0.01"
+            step="0.01"
+            placeholder="0.00"
+            value={addMoneyAmount}
+            onChange={e => setAddMoneyAmount(e.target.value)}
+            className="flex-1 bg-transparent outline-none text-white text-lg placeholder-gray-600"
+            autoFocus
+          />
+        </div>
+
+        <label className="text-xs text-gray-400 mb-1 block">Description</label>
+        <div className="flex items-center bg-[#2C2C2E] rounded-xl px-4 py-3 mb-6">
+          <input
+            type="text"
+            placeholder="Request money"
+            value={addMoneyDesc}
+            onChange={e => setAddMoneyDesc(e.target.value)}
+            className="flex-1 bg-transparent outline-none text-white text-sm placeholder-gray-600"
+          />
+        </div>
+
+        {addMoneyResult && (
+          <p className={`text-sm text-center mb-4 ${addMoneyResult.ok ? 'text-green-400' : 'text-red-400'}`}>
+            {addMoneyResult.ok ? '✓ ' : '✗ '}{addMoneyResult.msg}
+          </p>
+        )}
+
+        <button
+          onClick={handleAddMoney}
+          disabled={addMoneyLoading || !addMoneyAmount}
+          className="w-full py-3.5 rounded-xl bg-purple-600 text-white font-bold text-sm disabled:opacity-50 transition"
+        >
+          {addMoneyLoading ? 'Sending...' : 'Send Request'}
+        </button>
+      </div>
+    </div>
+  );
+
   return (
     <div className="flex items-center justify-center min-h-screen bg-gray-900">
       <div className="app-container">
@@ -509,6 +517,8 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      {showAddMoney && renderAddMoneyModal()}
     </div>
   );
 }
