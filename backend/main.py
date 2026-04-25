@@ -14,7 +14,12 @@ from pydantic import BaseModel
 from typing import List, Dict, Any, Tuple, Optional
 import anthropic
 from dotenv import load_dotenv, find_dotenv
-from bunq_client import get_recent_transactions, get_balance as get_balance_from_sdk
+try:
+    from bunq_client import get_recent_transactions, get_balance as get_balance_from_sdk
+except Exception as _bunq_import_err:
+    print(f"[startup] bunq SDK not available: {_bunq_import_err}")
+    def get_recent_transactions(limit=10): return []
+    def get_balance_from_sdk(): return None
 
 load_dotenv(find_dotenv())
 
@@ -521,27 +526,27 @@ def detect_subscriptions() -> list:
         dates = [p[0] for p in payments]
         amounts = [p[1] for p in payments]
 
-        # Classify interval: monthly (28-35d) or quarterly (80-100d)
+        # Classify interval: monthly (26-38d) or quarterly (78-105d)
         intervals = [(dates[i+1] - dates[i]).days for i in range(len(dates) - 1)]
-        if all(28 <= iv <= 35 for iv in intervals):
+        if all(26 <= iv <= 38 for iv in intervals):
             frequency = "monthly"
             annual_multiplier = 12
-        elif all(80 <= iv <= 100 for iv in intervals):
+        elif all(78 <= iv <= 105 for iv in intervals):
             frequency = "quarterly"
             annual_multiplier = 4
         else:
             continue
 
-        # Amount variance within 5%
+        # Amount variance within 10%
         avg_amount = sum(amounts) / len(amounts)
         if avg_amount == 0:
             continue
-        if max(abs(a - avg_amount) / avg_amount for a in amounts) > 0.05:
+        if max(abs(a - avg_amount) / avg_amount for a in amounts) > 0.10:
             continue
 
-        # Day of month variance within 7 days
+        # Day of month variance within 10 days
         days_of_month = [d.day for d in dates]
-        if max(days_of_month) - min(days_of_month) > 7:
+        if max(days_of_month) - min(days_of_month) > 10:
             continue
 
         result.append({

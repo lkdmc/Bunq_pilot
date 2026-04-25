@@ -74,14 +74,24 @@ export default function App() {
   const forecastLoadedRef = useRef(false);
   const trendLoadedRef = useRef(false);
 
+  const loadSubscriptions = () => {
+    subsLoadedRef.current = true;
+    setSubsLoading(true);
+    fetch(`${API_BASE}/api/subscriptions`)
+      .then(res => res.json())
+      .then(data => {
+        setSubscriptions(Array.isArray(data) ? data : []);
+        setSubsLoading(false);
+      })
+      .catch(() => {
+        subsLoadedRef.current = false;
+        setSubsLoading(false);
+      });
+  };
+
   useEffect(() => {
     if (currentTab === 'subs' && !subsLoadedRef.current) {
-      subsLoadedRef.current = true;
-      setSubsLoading(true);
-      fetch(`${API_BASE}/api/subscriptions`)
-        .then(res => res.json())
-        .then(data => { setSubscriptions(data); setSubsLoading(false); })
-        .catch(() => setSubsLoading(false));
+      loadSubscriptions();
     }
     if (currentTab === 'forecast') {
       if (!forecastLoadedRef.current) { forecastLoadedRef.current = true; loadForecast(); }
@@ -702,7 +712,19 @@ export default function App() {
     const totalAnnual = subscriptions.reduce((s, x) => s + x.annual_cost, 0);
     return (
       <div className="flex-1 overflow-y-auto no-scrollbar pb-[90px] bg-black text-white px-4 pt-12">
-        <h1 className="text-3xl font-bold mb-1">Subscriptions</h1>
+        <div className="flex items-start justify-between mb-1">
+          <h1 className="text-3xl font-bold">Subscriptions</h1>
+          <button
+            onClick={() => { subsLoadedRef.current = false; loadSubscriptions(); }}
+            disabled={subsLoading}
+            className="mt-1 text-gray-500 hover:text-gray-300 transition disabled:opacity-30"
+            aria-label="Refresh subscriptions"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+          </button>
+        </div>
         <p className="text-gray-400 text-sm mb-6">Recurring payments detected by AI</p>
 
         {subsLoading ? (
@@ -715,7 +737,15 @@ export default function App() {
             <p className="text-gray-500 text-sm">Analyzing your payments...</p>
           </div>
         ) : subscriptions.length === 0 ? (
-          <div className="text-center text-gray-500 mt-24">No recurring payments found yet</div>
+          <div className="flex flex-col items-center mt-24 gap-4">
+            <p className="text-gray-500">No recurring payments found yet</p>
+            <button
+              onClick={() => { subsLoadedRef.current = false; loadSubscriptions(); }}
+              className="text-sm text-gray-400 border border-gray-700 rounded-full px-4 py-1.5 hover:border-gray-500 hover:text-gray-200 transition"
+            >
+              Try again
+            </button>
+          </div>
         ) : (
           <>
             <div className="bunq-card p-4 mb-5 flex justify-between items-center">
