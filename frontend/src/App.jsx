@@ -737,11 +737,20 @@ export default function App() {
             <p className="text-gray-500 text-sm">Analyzing your payments...</p>
           </div>
         ) : subscriptions.length === 0 ? (
-          <div className="flex flex-col items-center mt-24 gap-4">
-            <p className="text-gray-500">No recurring payments found yet</p>
+          <div className="flex flex-col items-center mt-24 gap-3 px-4 text-center">
+            <p className="text-gray-400 text-base font-medium">
+              {transactions.length === 0
+                ? 'No transaction data yet'
+                : 'No recurring payments detected'}
+            </p>
+            <p className="text-gray-600 text-sm leading-relaxed">
+              {transactions.length === 0
+                ? 'Sync your bunq account from the Home tab first.'
+                : 'Need at least 2 payments to the same merchant within a regular interval.'}
+            </p>
             <button
               onClick={() => { subsLoadedRef.current = false; loadSubscriptions(); }}
-              className="text-sm text-gray-400 border border-gray-700 rounded-full px-4 py-1.5 hover:border-gray-500 hover:text-gray-200 transition"
+              className="mt-1 text-sm text-gray-400 border border-gray-700 rounded-full px-4 py-1.5 hover:border-gray-500 hover:text-gray-200 transition"
             >
               Try again
             </button>

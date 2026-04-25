@@ -712,6 +712,62 @@ Provide 3 short, punchy tips about their subcategory spending (Essential vs Stan
     return {"breakdown": breakdown, "advice": advice}
 
 
+@app.get("/api/debug/subscriptions")
+async def debug_subscriptions():
+    """Returns why each counterparty was accepted or rejected as a subscription."""
+    conn = sqlite3.connect("spending.db")
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM transactions WHERE amount < 0")
+    total_outgoing = c.fetchone()[0]
+    c.execute("SELECT counterparty, date, amount FROM transactions WHERE amount < 0 ORDER BY counterparty, date")
+    rows = c.fetchall()
+    conn.close()
+
+    by_counterparty = defaultdict(list)
+    for counterparty, date, amount in rows:
+        by_counterparty[counterparty].append((datetime.fromisoformat(date), abs(amount)))
+
+    report = {"total_outgoing_transactions": total_outgoing, "candidates": []}
+    for counterparty, payments in sorted(by_counterparty.items(), key=lambda x: -len(x[1])):
+        if len(payments) < 2:
+            continue
+        dates = [p[0] for p in payments]
+        amounts = [p[1] for p in payments]
+        intervals = [(dates[i+1] - dates[i]).days for i in range(len(dates) - 1)]
+        avg_amount = sum(amounts) / len(amounts) if amounts else 0
+        variance = max(abs(a - avg_amount) / avg_amount for a in amounts) if avg_amount else 0
+        dom = [d.day for d in dates]
+        dom_variance = max(dom) - min(dom)
+
+        if all(26 <= iv <= 38 for iv in intervals):
+            freq = "monthly"
+        elif all(78 <= iv <= 105 for iv in intervals):
+            freq = "quarterly"
+        else:
+            freq = None
+
+        reject_reasons = []
+        if freq is None:
+            reject_reasons.append(f"intervals not regular: {intervals}")
+        if variance > 0.10:
+            reject_reasons.append(f"amount variance {variance:.1%} > 10%")
+        if dom_variance > 10:
+            reject_reasons.append(f"day-of-month spread {dom_variance} > 10")
+
+        report["candidates"].append({
+            "counterparty": counterparty,
+            "count": len(payments),
+            "intervals": intervals,
+            "avg_amount": round(avg_amount, 2),
+            "amount_variance_pct": round(variance * 100, 1),
+            "dom_variance": dom_variance,
+            "status": "ACCEPTED" if not reject_reasons else "REJECTED",
+            "reject_reasons": reject_reasons,
+        })
+
+    return report
+
+
 @app.get("/api/subscriptions")
 async def api_subscriptions():
     subs = detect_subscriptions()
