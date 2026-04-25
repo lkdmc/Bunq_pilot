@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple, Optional
 import anthropic
 from dotenv import load_dotenv
 from bunq_client import get_recent_transactions, get_balance as get_balance_from_sdk
@@ -74,7 +74,7 @@ def init_db():
     conn.close()
     log("Database initialized.")
 
-def get_stored_balance() -> dict | None:
+def get_stored_balance() -> Optional[dict]:
     conn = sqlite3.connect("spending.db")
     c = conn.cursor()
     c.execute("SELECT balance, currency, updated_at FROM account_balance WHERE id = 1")
@@ -194,7 +194,7 @@ def get_all_transactions(limit=50):
     conn.close()
     return rows
 
-def get_available_months() -> list[tuple[int, int]]:
+def get_available_months() -> List[Tuple[int, int]]:
     conn = sqlite3.connect("spending.db")
     c = conn.cursor()
     c.execute("SELECT DISTINCT year, month FROM transactions ORDER BY year DESC, month DESC")
