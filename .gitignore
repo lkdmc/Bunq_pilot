@@ -50,3 +50,6 @@ yarn-error.log*
 backend/bunq.conf
 bunq.conf
 *.db
+
+# Test / scratch scripts (one-off debugging files)
+backend/test_*.py
