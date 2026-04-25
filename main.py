@@ -1,0 +1,304 @@
+import sqlite3
+import json
+import os
+import re
+from datetime import datetime
+from collections import deque
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
+import anthropic
+from dotenv import load_dotenv
+
+load_dotenv()
+
+app = FastAPI()
+
+# ── Config ────────────────────────────────────────────
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+# ── In-memory log buffer ──────────────────────────────
+log_buffer = deque(maxlen=100)
+
+def log(msg: str):
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    entry = f"[{timestamp}] {msg}"
+    log_buffer.append(entry)
+    print(entry)
+
+# ── DB Init ───────────────────────────────────────────
+def init_db():
+    conn = sqlite3.connect("spending.db")
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS transactions (
+            id TEXT PRIMARY KEY,
+            date TEXT,
+            amount REAL,
+            currency TEXT,
+            description TEXT,
+            counterparty TEXT,
+            category TEXT,
+            year INTEGER,
+            month INTEGER
+        )
+    """)
+    conn.commit()
+    conn.close()
+    log("Database initialized.")
+
+init_db()
+
+# ── Parse date from description ───────────────────────
+def parse_date_from_description(description: str, fallback: str) -> str:
+    """
+    Try to extract a date like DD-MM-YYYY from the description.
+    e.g. 'Albert Heijn 08-01-2026' -> '2026-01-08'
+    """
+    match = re.search(r'(\d{2})-(\d{2})-(\d{4})', description)
+    if match:
+        day, month, year = match.groups()
+        return f"{year}-{month}-{day}"
+    return fallback[:10]
+
+# ── Categorize with Claude ────────────────────────────
+def categorize_transaction(description: str, counterparty: str, amount: float) -> str:
+    prompt = f"""Classify the following bank transaction into ONE category. Reply with only the category name.
+
+Categories: Food, Entertainment, Subscription, Transport, Shopping, Health, Utilities, Transfer, Other
+
+Transaction description: {description}
+Counterparty: {counterparty}
+Amount: {amount} EUR
+
+Category:"""
+
+    message = anthropic_client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=20,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return message.content[0].text.strip()
+
+# ── Save Transaction ──────────────────────────────────
+def save_transaction(tx_id, date_str, amount, currency, description, counterparty, category):
+    dt = datetime.fromisoformat(date_str[:10])
+    conn = sqlite3.connect("spending.db")
+    c = conn.cursor()
+    c.execute("""
+        INSERT OR IGNORE INTO transactions 
+        (id, date, amount, currency, description, counterparty, category, year, month)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (tx_id, date_str[:10], amount, currency, description, counterparty, category, dt.year, dt.month))
+    conn.commit()
+    conn.close()
+
+# ── Monthly Summary ───────────────────────────────────
+def get_monthly_summary(year: int, month: int) -> dict:
+    conn = sqlite3.connect("spending.db")
+    c = conn.cursor()
+    c.execute("""
+        SELECT category, SUM(amount) 
+        FROM transactions 
+        WHERE year=? AND month=? AND amount < 0
+        GROUP BY category
+    """, (year, month))
+    rows = c.fetchall()
+    conn.close()
+    return {row[0]: abs(row[1]) for row in rows}
+
+# ── Generate Report ───────────────────────────────────
+def generate_report(year: int, month: int) -> str:
+    current = get_monthly_summary(year, month)
+
+    if not current:
+        return f"No spending data found for {year}-{month:02d}."
+
+    prev_month = month - 1 if month > 1 else 12
+    prev_year = year if month > 1 else year - 1
+    previous = get_monthly_summary(prev_year, prev_month)
+
+    lines = [f"Monthly Spending Report — {year}/{month:02d}", "=" * 42]
+
+    for category, amount in sorted(current.items(), key=lambda x: -x[1]):
+        line = f"  {category:<16} €{amount:>8.2f}"
+        if category in previous:
+            diff = amount - previous[category]
+            if diff > 0.01:
+                line += f"  (+€{diff:.2f} vs last month)"
+            elif diff < -0.01:
+                line += f"  (-€{abs(diff):.2f} vs last month)"
+            else:
+                line += "  (no change)"
+        else:
+            line += "  (new this month)"
+        lines.append(line)
+
+    total = sum(current.values())
+    lines.append("=" * 42)
+    lines.append(f"  {'TOTAL':<16} €{total:>8.2f}")
+
+    if not previous:
+        lines.append("\n  No previous month data — comparison available next month.")
+
+    return "\n".join(lines)
+
+# ── Get All Transactions ──────────────────────────────
+def get_all_transactions(limit=50):
+    conn = sqlite3.connect("spending.db")
+    c = conn.cursor()
+    c.execute("""
+        SELECT date, counterparty, description, amount, currency, category
+        FROM transactions
+        ORDER BY date DESC
+        LIMIT ?
+    """, (limit,))
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+# ── Webhook ───────────────────────────────────────────
+@app.post("/webhook")
+async def receive_webhook(request: Request):
+    body = await request.json()
+    log(f"Webhook received: {json.dumps(body)[:150]}")
+
+    try:
+        notification = body.get("NotificationUrl", {})
+        obj = notification.get("object", {})
+
+        if "Payment" in obj:
+            payment = obj["Payment"]
+            tx_id = str(payment.get("id"))
+            created_str = payment.get("created", "")
+            amount_obj = payment.get("amount", {})
+            amount = float(amount_obj.get("value", 0))
+            currency = amount_obj.get("currency", "EUR")
+            description = payment.get("description", "")
+            counterparty = payment.get("counterparty_alias", {}).get("display_name", "")
+
+            if amount < 0:
+                # Parse date from description if available
+                date_str = parse_date_from_description(description, created_str)
+                log(f"Outgoing payment: {description} | {counterparty} | €{amount} | date: {date_str}")
+                category = categorize_transaction(description, counterparty, amount)
+                log(f"Category: {category}")
+                save_transaction(tx_id, date_str, amount, currency, description, counterparty, category)
+                log(f"Saved to DB.")
+            else:
+                log(f"Incoming payment skipped: €{amount} from {counterparty}")
+
+    except Exception as e:
+        log(f"ERROR: {e}")
+
+    return {"status": "ok"}
+
+# ── Dashboard ─────────────────────────────────────────
+@app.get("/", response_class=HTMLResponse)
+def dashboard():
+    now = datetime.now()
+    report = generate_report(now.year, now.month)
+    transactions = get_all_transactions()
+
+    tx_rows = ""
+    for t in transactions:
+        date_, counterparty, desc, amount, currency, category = t
+        color = "#ff6b6b" if amount < 0 else "#51cf66"
+        tx_rows += f"""
+        <tr>
+            <td>{date_}</td>
+            <td>{counterparty}</td>
+            <td>{desc}</td>
+            <td style="color:{color}">€{amount:.2f}</td>
+            <td><span class="badge">{category}</span></td>
+        </tr>"""
+
+    logs_html = "\n".join(reversed(list(log_buffer)))
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>bunq Spending Tracker</title>
+    <meta http-equiv="refresh" content="5">
+    <style>
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{ font-family: 'Courier New', monospace; background: #0d0d0d; color: #e0e0e0; padding: 24px; }}
+        h1 {{ color: #00d4aa; font-size: 24px; margin-bottom: 4px; }}
+        .subtitle {{ color: #555; font-size: 13px; margin-bottom: 24px; }}
+        h2 {{ color: #888; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }}
+        .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px; }}
+        .card {{ background: #161616; border: 1px solid #252525; border-radius: 10px; padding: 20px; }}
+        pre {{ white-space: pre-wrap; color: #b0ffb0; font-size: 13px; line-height: 1.6; }}
+        .log {{ height: 220px; overflow-y: auto; color: #888; font-size: 12px; white-space: pre-wrap; line-height: 1.8; }}
+        table {{ width: 100%; border-collapse: collapse; }}
+        th {{ padding: 10px 12px; text-align: left; color: #00d4aa; font-size: 12px; text-transform: uppercase; border-bottom: 1px solid #252525; }}
+        td {{ padding: 10px 12px; border-bottom: 1px solid #1a1a1a; font-size: 13px; }}
+        tr:hover td {{ background: #1a1a1a; }}
+        .badge {{ background: #0a2a2a; color: #00d4aa; padding: 3px 10px; border-radius: 20px; font-size: 11px; }}
+        .dot {{ display: inline-block; width: 8px; height: 8px; background: #00d4aa; border-radius: 50%; margin-right: 6px; animation: pulse 1.5s infinite; }}
+        @keyframes pulse {{ 0%, 100% {{ opacity: 1; }} 50% {{ opacity: 0.3; }} }}
+        .month-nav {{ display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }}
+        .month-btn {{ background: #1a1a1a; border: 1px solid #333; color: #aaa; padding: 4px 12px; border-radius: 4px; font-size: 12px; text-decoration: none; }}
+        .month-btn:hover {{ border-color: #00d4aa; color: #00d4aa; }}
+    </style>
+</head>
+<body>
+    <h1>💳 bunq Spending Tracker</h1>
+    <p class="subtitle"><span class="dot"></span>Live — auto-refreshes every 5 seconds</p>
+
+    <div class="month-nav">
+        <span style="color:#555; font-size:12px; padding: 4px 0;">Jump to report:</span>
+        <a class="month-btn" href="/report-page/2026/1">Jan 2026</a>
+        <a class="month-btn" href="/report-page/2026/2">Feb 2026</a>
+        <a class="month-btn" href="/report-page/2026/3">Mar 2026</a>
+        <a class="month-btn" href="/report-page/2026/4">Apr 2026</a>
+    </div>
+
+    <div class="grid">
+        <div class="card">
+            <h2>📊 {now.strftime("%B %Y")} Report</h2>
+            <pre>{report}</pre>
+        </div>
+        <div class="card">
+            <h2>🔴 Live Logs</h2>
+            <div class="log">{logs_html if logs_html else "Waiting for events..."}</div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>📋 Recent Transactions</h2>
+        <table>
+            <tr><th>Date</th><th>Counterparty</th><th>Description</th><th>Amount</th><th>Category</th></tr>
+            {tx_rows if tx_rows else '<tr><td colspan="5" style="color:#444; padding:20px">No transactions yet.</td></tr>'}
+        </table>
+    </div>
+</body>
+</html>"""
+    return html
+
+# ── Report page for any month ─────────────────────────
+@app.get("/report-page/{year}/{month}", response_class=HTMLResponse)
+def report_page(year: int, month: int):
+    report = generate_report(year, month)
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Report {year}/{month:02d}</title>
+    <style>
+        body {{ font-family: monospace; background: #0d0d0d; color: #e0e0e0; padding: 40px; }}
+        pre {{ color: #b0ffb0; font-size: 14px; line-height: 1.8; }}
+        a {{ color: #00d4aa; }}
+    </style>
+</head>
+<body>
+    <a href="/">← Back to dashboard</a>
+    <br><br>
+    <pre>{report}</pre>
+</body>
+</html>"""
+
+# ── Report API ────────────────────────────────────────
+@app.get("/report/{year}/{month}")
+def get_report(year: int, month: int):
+    report = generate_report(year, month)
+    return {"report": report}

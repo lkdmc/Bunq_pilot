@@ -1,0 +1,10 @@
+.env
+private.pem
+private_key.pem
+public_key.pem
+spending.db
+device_token.json
+__pycache__/
+*.pyc
+venv/
+.venv/
