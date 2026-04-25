@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 
 const getIconForMerchant = (merchant) => {
   if (merchant.includes('Starbucks')) return { icon: '☕', bg: 'bg-green-900', text: 'text-green-400' };
@@ -198,15 +199,15 @@ export default function App() {
             const { icon, bg, text } = getIconForMerchant(t.merchant);
             return (
               <div key={i} className="flex items-center justify-between p-3 hover:bg-[#2C2C2E] rounded-lg transition">
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 min-w-0">
                   <div className={`w-10 h-10 rounded-full ${bg} ${text} flex items-center justify-center text-lg shrink-0`}>{icon}</div>
-                  <div>
-                    <p className="text-sm font-bold text-white">{t.merchant}</p>
-                    <p className="text-xs text-gray-400">{t.desc || t.date}</p>
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-white truncate">{t.merchant}</p>
+                    <p className="text-xs text-gray-400 truncate">{t.desc || t.date}</p>
                   </div>
                 </div>
-                <p className={`text-[16px] font-bold ${isExpense ? 'text-white' : 'text-blue-500'}`}>
-                  {isExpense ? '' : '+'}€ {t.amount.replace('-', '')}
+                <p className={`text-[15px] font-bold shrink-0 ml-2 ${isExpense ? 'text-white' : 'text-blue-500'}`}>
+                  {isExpense ? '-' : '+'}€{Math.abs(parseFloat(t.amount)).toFixed(2)}
                 </p>
               </div>
             );
@@ -518,7 +519,7 @@ export default function App() {
         </div>
       </div>
 
-      {showAddMoney && renderAddMoneyModal()}
+      {showAddMoney && createPortal(renderAddMoneyModal(), document.body)}
     </div>
   );
 }
