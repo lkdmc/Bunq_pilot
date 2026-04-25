@@ -188,6 +188,8 @@ def get_available_months() -> List[Tuple[int, int]]:
     return rows
 
 # ── Webhook ───────────────────────────────────────────
+HANDLED_EVENTS = {"PAYMENT_CREATED", "REQUEST_RESPONSE_CREATED"}
+
 @app.post("/webhook")
 async def receive_webhook(request: Request):
     body = await request.json()
@@ -195,13 +197,14 @@ async def receive_webhook(request: Request):
         notification = body.get("NotificationUrl", {})
         event_type = notification.get("event_type", "")
 
-        # Deduplicate: only process PAYMENT_CREATED (ignore PAYMENT_RECEIVED etc.)
-        if event_type and event_type != "PAYMENT_CREATED":
+        if event_type and event_type not in HANDLED_EVENTS:
             log(f"Skipping event: {event_type}")
             return {"status": "ok"}
 
-        log(f"Webhook received: {json.dumps(body)[:150]}")
+        log(f"Webhook received ({event_type}): {json.dumps(body)[:120]}")
         obj = notification.get("object", {})
+
+        # ── Regular outgoing payment ──────────────────
         if "Payment" in obj:
             payment = obj["Payment"]
             tx_id = str(payment.get("id"))
@@ -212,7 +215,6 @@ async def receive_webhook(request: Request):
             description = payment.get("description", "")
             counterparty = payment.get("counterparty_alias", {}).get("display_name", "")
 
-            # Store balance after mutation if present
             bal_obj = payment.get("balance_after_mutation", {})
             if bal_obj.get("value"):
                 update_stored_balance(float(bal_obj["value"]), bal_obj.get("currency", "EUR"))
@@ -220,11 +222,36 @@ async def receive_webhook(request: Request):
 
             if amount < 0:
                 date_str = parse_date_from_description(description, created_str)
-                log(f"Outgoing payment: {description} | {counterparty} | €{amount} | date: {date_str}")
                 save_transaction(tx_id, date_str, amount, currency, description, counterparty, "")
-                log("Saved to DB.")
+                log(f"Saved payment: {counterparty} €{amount}")
             else:
                 log(f"Incoming payment skipped: €{amount} from {counterparty}")
+
+        # ── Accepted payment request (betaalverzoek) ──
+        elif "RequestResponse" in obj:
+            rr = obj["RequestResponse"]
+            # Only track accepted responses (money actually left the account)
+            if rr.get("status") != "ACCEPTED":
+                log(f"Request response skipped (status={rr.get('status')})")
+                return {"status": "ok"}
+
+            tx_id = f"rr-{rr.get('id')}"
+            created_str = rr.get("created", "")
+            amount_obj = rr.get("amount_responded") or rr.get("amount_inquired", {})
+            amount = -abs(float(amount_obj.get("value", 0)))
+            currency = amount_obj.get("currency", "EUR")
+            description = rr.get("description", "Betaalverzoek")
+            counterparty = (rr.get("counterparty_alias") or {}).get("display_name", "")
+
+            bal_obj = rr.get("balance_after_mutation", {})
+            if bal_obj and bal_obj.get("value"):
+                update_stored_balance(float(bal_obj["value"]), bal_obj.get("currency", "EUR"))
+                log(f"Balance updated: €{bal_obj['value']}")
+
+            date_str = parse_date_from_description(description, created_str)
+            save_transaction(tx_id, date_str, amount, currency, description, counterparty, "")
+            log(f"Saved request response: {counterparty} €{amount}")
+
     except Exception as e:
         log(f"ERROR: {e}")
     return {"status": "ok"}

@@ -1,5 +1,5 @@
 """
-Seed 2 years of realistic Dutch spending data directly via webhook.
+Seed 2+ years of realistic Dutch spending data directly via webhook.
 Run from backend/: python seed_data.py
 """
 import random
@@ -68,12 +68,24 @@ SHOPPING = [
 ]
 
 TRANSPORT = [
-    ("NS",       "NS Reizen",         10,  80),
-    ("OV-chip",  "OV-chipkaart",       5,  30),
-    ("Uber",     "Uber",               8,  35),
-    ("Shell",    "Shell Tankstation", 60, 110),
-    ("BP",       "BP Tankstation",    55, 105),
-    ("Parking",  "Q-Park Rotterdam",   3,  20),
+    ("NS",      "NS Reizen",         10,  80),
+    ("OV-chip", "OV-chipkaart",       5,  30),
+    ("Uber",    "Uber",               8,  35),
+    ("Shell",   "Shell Tankstation", 60, 110),
+    ("BP",      "BP Tankstation",    55, 105),
+    ("Q-Park",  "Q-Park Rotterdam",   3,  20),
+]
+
+# People who send payment requests to the user
+REQUEST_SENDERS = [
+    ("Thomas de Vries",  "Etentje",               15,  60),
+    ("Emma Bakker",      "Huur aandeel",           80, 200),
+    ("Liam van der Berg","Vakantie kosten",        50, 180),
+    ("Sophie Janssen",   "Cadeautje",              10,  50),
+    ("Noah Mulder",      "Gezamenlijke boodschap", 20,  80),
+    ("Olivia de Boer",   "Sportschool bijdrage",   15,  40),
+    ("Lucas Visser",     "Taxi",                    8,  30),
+    ("Mia Smit",         "Concert tickets",        25,  90),
 ]
 
 PERIODIC = [
@@ -86,7 +98,7 @@ PERIODIC = [
     ("LinkedIn",           "LinkedIn Premium",                      39.99, [1, 7]),
 ]
 
-def send(date: datetime, counterparty: str, description: str, amount: float):
+def send_payment(date: datetime, counterparty: str, description: str, amount: float):
     global balance, tx_counter
     balance -= amount
     payload = {
@@ -109,45 +121,79 @@ def send(date: datetime, counterparty: str, description: str, amount: float):
     print(f"  {status}  {date.strftime('%Y-%m-%d')}  {counterparty:<28} €{amount:.2f}")
     tx_counter += 1
 
+def send_request_response(date: datetime, counterparty: str, description: str, amount: float):
+    """Simulate accepting a payment request someone sent to us."""
+    global balance, tx_counter
+    balance -= amount
+    payload = {
+        "NotificationUrl": {
+            "event_type": "REQUEST_RESPONSE_CREATED",
+            "object": {
+                "RequestResponse": {
+                    "id": f"rr-{tx_counter:04d}",
+                    "created": date.strftime("%Y-%m-%d %H:%M:%S"),
+                    "status": "ACCEPTED",
+                    "amount_inquired": {"value": f"{amount:.2f}", "currency": "EUR"},
+                    "amount_responded": {"value": f"{amount:.2f}", "currency": "EUR"},
+                    "balance_after_mutation": {"value": f"{balance:.2f}", "currency": "EUR"},
+                    "description": f"{description} {date.strftime('%d-%m-%Y')}",
+                    "counterparty_alias": {"display_name": counterparty},
+                }
+            }
+        }
+    }
+    resp = requests.post(WEBHOOK_URL, json=payload)
+    status = "✓" if resp.status_code == 200 else f"✗ {resp.text[:60]}"
+    print(f"  {status}  {date.strftime('%Y-%m-%d')}  [REQ] {counterparty:<24} €{amount:.2f}")
+    tx_counter += 1
+
 def generate_month(year: int, month: int):
     print(f"\n=== {datetime(year, month, 1).strftime('%B %Y')} ===")
     txs = []
 
     for counterparty, desc, amount, day in MONTHLY_FIXED:
-        txs.append((datetime(year, month, min(day, 28)), counterparty, desc, amount))
+        txs.append(("payment", datetime(year, month, min(day, 28)), counterparty, desc, amount))
 
     for counterparty, desc, lo, hi, day in MONTHLY_VARIABLE:
-        txs.append((datetime(year, month, min(day, 28)), counterparty, desc, round(random.uniform(lo, hi), 2)))
+        txs.append(("payment", datetime(year, month, min(day, 28)), counterparty, desc, round(random.uniform(lo, hi), 2)))
 
     # Groceries: 4-6 trips
     for day in sorted(random.sample(range(1, 29), random.randint(4, 6))):
         name, desc = random.choice(GROCERIES)
-        txs.append((datetime(year, month, day), name, desc, round(random.uniform(25, 120), 2)))
+        txs.append(("payment", datetime(year, month, day), name, desc, round(random.uniform(25, 120), 2)))
 
     # Dining: 2-4 per month
     for counterparty, desc, lo, hi in random.sample(DINING, random.randint(2, 4)):
-        txs.append((datetime(year, month, random.randint(1, 28)), counterparty, desc, round(random.uniform(lo, hi), 2)))
+        txs.append(("payment", datetime(year, month, random.randint(1, 28)), counterparty, desc, round(random.uniform(lo, hi), 2)))
 
     # Shopping: 1-3 per month
     for counterparty, desc, lo, hi in random.sample(SHOPPING, random.randint(1, 3)):
-        txs.append((datetime(year, month, random.randint(1, 28)), counterparty, desc, round(random.uniform(lo, hi), 2)))
+        txs.append(("payment", datetime(year, month, random.randint(1, 28)), counterparty, desc, round(random.uniform(lo, hi), 2)))
 
     # Transport: 1-3 per month
     for counterparty, desc, lo, hi in random.sample(TRANSPORT, random.randint(1, 3)):
-        txs.append((datetime(year, month, random.randint(1, 28)), counterparty, desc, round(random.uniform(lo, hi), 2)))
+        txs.append(("payment", datetime(year, month, random.randint(1, 28)), counterparty, desc, round(random.uniform(lo, hi), 2)))
 
     # Periodic
     for counterparty, desc, amount, months in PERIODIC:
         if month in months:
-            txs.append((datetime(year, month, 15), counterparty, desc, amount))
+            txs.append(("payment", datetime(year, month, 15), counterparty, desc, amount))
 
-    for t in sorted(txs, key=lambda x: x[0]):
-        send(*t)
+    # Payment requests accepted: 1-2 per month
+    for counterparty, desc, lo, hi in random.sample(REQUEST_SENDERS, random.randint(1, 2)):
+        txs.append(("request", datetime(year, month, random.randint(1, 28)), counterparty, desc, round(random.uniform(lo, hi), 2)))
+
+    for kind, *args in sorted(txs, key=lambda x: x[1]):
+        if kind == "payment":
+            send_payment(*args)
+        else:
+            send_request_response(*args)
 
 if __name__ == "__main__":
     random.seed(42)
-    print("Seeding 2 years of spending data (Jan 2024 – Dec 2025)...")
-    for year in [2024, 2025]:
-        for month in range(1, 13):
-            generate_month(year, month)
+    print("Seeding Jan 2024 – Apr 2026...")
+    months = [(y, m) for y in [2024, 2025] for m in range(1, 13)]
+    months += [(2026, m) for m in range(1, 5)]
+    for year, month in months:
+        generate_month(year, month)
     print(f"\n=== Done! {tx_counter - 1} transactions seeded | Final balance: €{balance:.2f} ===")
