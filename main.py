@@ -143,6 +143,15 @@ def generate_report(year: int, month: int) -> str:
 
     return "\n".join(lines)
 
+# ── Available months (for nav) ────────────────────────
+def get_available_months() -> list[tuple[int, int]]:
+    conn = sqlite3.connect("spending.db")
+    c = conn.cursor()
+    c.execute("SELECT DISTINCT year, month FROM transactions ORDER BY year DESC, month DESC")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
 # ── Get All Transactions ──────────────────────────────
 def get_all_transactions(limit=50):
     conn = sqlite3.connect("spending.db")
@@ -199,6 +208,7 @@ def dashboard():
     now = datetime.now()
     report = generate_report(now.year, now.month)
     transactions = get_all_transactions()
+    available_months = get_available_months()
 
     tx_rows = ""
     for t in transactions:
@@ -248,10 +258,12 @@ def dashboard():
 
     <div class="month-nav">
         <span style="color:#555; font-size:12px; padding: 4px 0;">Jump to report:</span>
-        <a class="month-btn" href="/report-page/2026/1">Jan 2026</a>
-        <a class="month-btn" href="/report-page/2026/2">Feb 2026</a>
-        <a class="month-btn" href="/report-page/2026/3">Mar 2026</a>
-        <a class="month-btn" href="/report-page/2026/4">Apr 2026</a>
+        {"".join(
+            f'<a class="month-btn" href="/report-page/{y}/{m}">'
+            f'{datetime(y, m, 1).strftime("%b %Y")}</a>'
+            for y, m in available_months
+        ) or '<span style="color:#444; font-size:12px;">No data yet</span>'}
+        <a class="month-btn" href="/advice" style="margin-left:12px; border-color:#555;">💡 Advice</a>
     </div>
 
     <div class="grid">
@@ -294,6 +306,78 @@ def report_page(year: int, month: int):
     <a href="/">← Back to dashboard</a>
     <br><br>
     <pre>{report}</pre>
+</body>
+</html>"""
+
+# ── Advice ───────────────────────────────────────────
+@app.get("/advice", response_class=HTMLResponse)
+def get_advice():
+    now = datetime.now()
+    summary = get_monthly_summary(now.year, now.month)
+
+    if not summary:
+        months = get_available_months()
+        if months:
+            summary = get_monthly_summary(months[0][0], months[0][1])
+            label = f"{datetime(months[0][0], months[0][1], 1).strftime('%B %Y')}"
+        else:
+            label = None
+    else:
+        label = now.strftime("%B %Y")
+
+    if not summary:
+        advice_html = "<p style='color:#888'>No spending data available yet.</p>"
+    else:
+        total = sum(summary.values())
+        lines = "\n".join(
+            f"- {cat}: €{amt:.2f}" for cat, amt in sorted(summary.items(), key=lambda x: -x[1])
+        )
+        prompt = f"""You are a personal finance advisor. Analyze this month's spending and provide exactly 3 specific, actionable saving tips.
+
+Spending breakdown ({label}):
+{lines}
+Total: €{total:.2f}
+
+Rules:
+- Each tip must reference a specific category from the data above
+- Be concrete (mention actual amounts or percentages)
+- Format: numbered list, one tip per line, no extra commentary"""
+
+        message = anthropic_client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        raw = message.content[0].text.strip()
+        log(f"Advice generated for {label}")
+
+        tips = [line.strip() for line in raw.split("\n") if line.strip()]
+        advice_html = "\n".join(
+            f'<div class="tip"><span class="tip-num">{i+1}</span><span class="tip-text">{tip.lstrip("0123456789. ")}</span></div>'
+            for i, tip in enumerate(tips[:3])
+        )
+
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Spending Advice</title>
+    <style>
+        body {{ font-family: 'Courier New', monospace; background: #0d0d0d; color: #e0e0e0; padding: 40px; max-width: 700px; }}
+        h1 {{ color: #00d4aa; font-size: 22px; margin-bottom: 4px; }}
+        .sub {{ color: #555; font-size: 13px; margin-bottom: 32px; }}
+        .tip {{ display: flex; gap: 16px; align-items: flex-start; background: #161616; border: 1px solid #252525; border-radius: 10px; padding: 18px 20px; margin-bottom: 14px; }}
+        .tip-num {{ color: #00d4aa; font-size: 22px; font-weight: bold; min-width: 24px; }}
+        .tip-text {{ color: #ccc; font-size: 14px; line-height: 1.7; }}
+        a {{ color: #00d4aa; font-size: 13px; text-decoration: none; }}
+        a:hover {{ text-decoration: underline; }}
+    </style>
+</head>
+<body>
+    <h1>💡 Saving Tips</h1>
+    <p class="sub">Based on {label or "available"} spending data</p>
+    {advice_html}
+    <br>
+    <a href="/">← Back to dashboard</a>
 </body>
 </html>"""
 
