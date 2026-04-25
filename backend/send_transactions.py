@@ -10,9 +10,9 @@ import requests
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.backends import default_backend
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
-load_dotenv()
+load_dotenv(find_dotenv())
 
 SESSION_TOKEN = os.getenv("BUNQ_SESSION_TOKEN", "")
 USER_ID = os.getenv("BUNQ_USER_ID", "")

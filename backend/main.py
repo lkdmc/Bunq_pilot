@@ -11,10 +11,10 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from typing import List, Dict, Any, Tuple, Optional
 import anthropic
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 from bunq_client import get_recent_transactions, get_balance as get_balance_from_sdk
 
-load_dotenv()
+load_dotenv(find_dotenv())
 
 # ── Diagnostic ────────────────────────────────────────
 _key = os.getenv("ANTHROPIC_API_KEY", "")
