@@ -35,6 +35,14 @@ export default function App() {
   const [receiptTxId, setReceiptTxId] = useState(null);
   const chatBoxRef = useRef(null);
 
+  // F.R. (Financial Report) modal states
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [reportReady, setReportReady] = useState(false);
+  const [reportData, setReportData] = useState(null);
+  const [userPreference, setUserPreference] = useState({});
+  const [selectedTxIndex, setSelectedTxIndex] = useState(null);
+
   const fetchHomeData = () => {
     setRefreshing(true);
     Promise.all([
@@ -100,6 +108,270 @@ export default function App() {
     } finally {
       setIsWaiting(false);
     }
+  };
+
+  // ── F.R. Financial Report ─────────────────────────────
+
+  const handleAnalyze = async () => {
+    setIsAnalyzing(true);
+    setReportReady(false);
+    try {
+      const txData = transactions.slice(0, 15).map(t => ({
+        date: t.date,
+        merchant: t.merchant,
+        amount: t.amount,
+      }));
+      const res = await fetch('http://127.0.0.1:8000/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transactions: txData, user_preference: userPreference }),
+      });
+      if (!res.ok) throw new Error('Analyze API failed');
+      const data = await res.json();
+      setReportData(data);
+      setReportReady(true);
+    } catch (err) {
+      console.error(err);
+      alert('Failed to analyze. Please check if the backend is running and API key is set.');
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const handleCategoryChange = (newCategory) => {
+    if (selectedTxIndex === null) return;
+    const target = reportData.categorized_items[selectedTxIndex];
+    const newItems = [...reportData.categorized_items];
+    newItems[selectedTxIndex] = { ...target, category: newCategory };
+    setReportData({ ...reportData, categorized_items: newItems });
+    setUserPreference(prev => ({ ...prev, [target.merchant]: newCategory }));
+    setSelectedTxIndex(null);
+  };
+
+  const renderReportModal = () => {
+    let essentialSum = 0, standardSum = 0, luxurySum = 0, incomeSum = 0;
+    if (reportReady && reportData?.categorized_items) {
+      reportData.categorized_items.forEach(item => {
+        const amt = parseFloat(item.amount) || 0;
+        if (item.category === 'Income' || amt > 0) incomeSum += Math.abs(amt);
+        else if (item.category === 'Essential') essentialSum += Math.abs(amt);
+        else if (item.category === 'Standard') standardSum += Math.abs(amt);
+        else if (item.category === 'Luxury') luxurySum += Math.abs(amt);
+      });
+    }
+    const totalExpense = essentialSum + standardSum + luxurySum || 1;
+    const essentialPct = essentialSum / totalExpense;
+    const standardPct = standardSum / totalExpense;
+    const luxuryPct = luxurySum / totalExpense;
+    const now = new Date();
+    const monthName = now.toLocaleString('default', { month: 'long' });
+
+    const closeBtn = (
+      <button
+        className="absolute top-4 right-4 text-gray-500 hover:text-white transition-colors z-50 bg-[#1C1C1E] border border-[#2C2C2E] rounded-full p-1.5"
+        onClick={() => { setShowReportModal(false); setIsAnalyzing(false); setReportReady(false); }}
+      >
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg>
+      </button>
+    );
+
+    if (!reportReady && isAnalyzing) return (
+      <div className="absolute inset-0 z-50 bg-black flex flex-col items-center justify-center gap-6">
+        {closeBtn}
+        <div className="relative">
+          <div className="absolute inset-0 rounded-full bg-gradient-to-tr from-[#FF8C00] to-[#AF52DE] opacity-25 animate-ping scale-110"></div>
+          <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-[#FF8C00] to-[#AF52DE] flex items-center justify-center text-white text-3xl font-bold relative shadow-[0_0_40px_rgba(175,82,222,0.5)]">F</div>
+        </div>
+        <div className="text-center">
+          <p className="text-white font-semibold text-base mb-1">Finn is analyzing…</p>
+          <p className="text-gray-500 text-sm">Categorizing your transactions</p>
+        </div>
+        <div className="flex gap-1.5 mt-2">
+          {[0, 150, 300].map(d => (
+            <div key={d} className="w-2 h-2 rounded-full bg-gradient-to-r from-[#FF8C00] to-[#AF52DE] animate-bounce" style={{ animationDelay: `${d}ms` }}></div>
+          ))}
+        </div>
+      </div>
+    );
+
+    if (!reportReady) return (
+      <div className="absolute inset-0 z-50 bg-black flex flex-col overflow-y-auto no-scrollbar">
+        {closeBtn}
+        <div className="flex-1 flex flex-col items-center justify-center px-6 gap-6 pt-10 pb-10">
+          <div className="relative">
+            <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-[#FF8C00] to-[#AF52DE] flex items-center justify-center text-white text-3xl font-bold shadow-[0_0_50px_rgba(175,82,222,0.4)]">F</div>
+            <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-green-500 rounded-full border-2 border-black flex items-center justify-center">
+              <svg className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
+            </div>
+          </div>
+          <div className="text-center">
+            <h2 className="text-2xl font-bold text-white mb-2">Financial Report</h2>
+            <p className="text-gray-500 text-sm leading-relaxed max-w-[220px] mx-auto">Finn analyzes your spending and delivers personalized insights</p>
+          </div>
+          <div className="flex flex-wrap justify-center gap-2">
+            {['Spending Breakdown', 'AI Insights', 'Category Analysis'].map(f => (
+              <span key={f} className="px-3 py-1 bg-[#1C1C1E] border border-[#2C2C2E] rounded-full text-xs text-gray-400">{f}</span>
+            ))}
+          </div>
+          <button
+            onClick={handleAnalyze}
+            className="w-full bg-gradient-to-r from-[#FF8C00] to-[#AF52DE] text-white font-bold py-4 rounded-2xl shadow-[0_8px_30px_rgba(175,82,222,0.35)] transition-all transform hover:scale-[1.02] active:scale-[0.98] mt-2"
+          >
+            Analyze My Spending →
+          </button>
+          <p className="text-gray-600 text-xs">Based on your last 15 transactions</p>
+        </div>
+      </div>
+    );
+
+    return (
+      <div className="absolute inset-0 z-50 bg-black flex flex-col overflow-y-auto no-scrollbar pb-10">
+        {closeBtn}
+        <div className="px-4 pt-12 pb-5 border-b border-[#1C1C1E]">
+          <p className="text-[10px] font-semibold text-gray-600 tracking-widest uppercase mb-0.5">{monthName} {now.getFullYear()}</p>
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-[#FF8C00] to-[#AF52DE] flex items-center justify-center text-white text-[10px] font-bold shrink-0">F</div>
+            <h1 className="text-xl font-bold text-white">Spending Report</h1>
+          </div>
+        </div>
+
+        <div className="px-4 pt-5 flex flex-col gap-4">
+          <div className="relative bg-[#111] border border-[#2C2C2E] rounded-2xl p-4 overflow-hidden">
+            <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-[#FF8C00] to-[#AF52DE]"></div>
+            <p className="text-[10px] font-bold text-gray-600 tracking-widest uppercase mb-2">FINN'S SUMMARY</p>
+            <p className="text-gray-200 text-sm leading-relaxed italic">"{reportData?.summary_headline}"</p>
+          </div>
+
+          <div className="bg-[#111] border border-[#2C2C2E] rounded-2xl p-4">
+            <p className="text-[10px] font-bold text-gray-600 tracking-widest uppercase mb-4">SPENDING OVERVIEW</p>
+            <div className="flex items-center gap-4 mb-4">
+              <div className="relative w-28 h-28 shrink-0">
+                <svg viewBox="0 0 32 32" className="w-full h-full -rotate-90">
+                  <circle r="12" cx="16" cy="16" fill="transparent" stroke="#1C1C1E" strokeWidth="5" />
+                  <circle r="12" cx="16" cy="16" fill="transparent" stroke="#06b6d4" strokeWidth="5"
+                    strokeDasharray={`${essentialPct * 75.4} 100`} strokeDashoffset="0" />
+                  <circle r="12" cx="16" cy="16" fill="transparent" stroke="#3b82f6" strokeWidth="5"
+                    strokeDasharray={`${standardPct * 75.4} 100`} strokeDashoffset={`${-essentialPct * 75.4}`} />
+                  <circle r="12" cx="16" cy="16" fill="transparent" stroke="#a855f7" strokeWidth="5"
+                    strokeDasharray={`${luxuryPct * 75.4} 100`} strokeDashoffset={`${-(essentialPct + standardPct) * 75.4}`} />
+                </svg>
+                <div className="absolute inset-0 flex flex-col items-center justify-center">
+                  <span className="text-base font-bold text-white">€{(essentialSum + standardSum + luxurySum).toFixed(0)}</span>
+                  <span className="text-[9px] text-gray-500">total spent</span>
+                </div>
+              </div>
+              <div className="flex-1 flex flex-col gap-3">
+                {[
+                  { label: 'Essential', pct: essentialPct, color: 'bg-cyan-500', amt: essentialSum },
+                  { label: 'Standard', pct: standardPct, color: 'bg-blue-500', amt: standardSum },
+                  { label: 'Luxury', pct: luxuryPct, color: 'bg-purple-500', amt: luxurySum },
+                ].map(({ label, pct, color, amt }) => (
+                  <div key={label}>
+                    <div className="flex justify-between mb-1">
+                      <span className="text-[11px] text-gray-400">{label}</span>
+                      <span className="text-[11px] font-semibold text-white">€{amt.toFixed(0)}</span>
+                    </div>
+                    <div className="h-1 bg-[#2C2C2E] rounded-full overflow-hidden">
+                      <div className={`h-full ${color} rounded-full`} style={{ width: `${pct * 100}%` }}></div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="flex gap-3 pt-4 border-t border-[#2C2C2E]">
+              <div className="flex-1 bg-green-500/10 border border-green-500/20 rounded-xl p-3">
+                <p className="text-[9px] font-bold text-green-500 tracking-widest uppercase mb-0.5">Income</p>
+                <p className="text-sm font-bold text-green-400">+€{incomeSum.toFixed(2)}</p>
+              </div>
+              <div className="flex-1 bg-red-500/10 border border-red-500/20 rounded-xl p-3">
+                <p className="text-[9px] font-bold text-red-500 tracking-widest uppercase mb-0.5">Spent</p>
+                <p className="text-sm font-bold text-red-400">-€{(essentialSum + standardSum + luxurySum).toFixed(2)}</p>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <p className="text-[10px] font-bold text-gray-600 tracking-widest uppercase mb-3">AI INSIGHTS</p>
+            <div className="flex flex-col gap-2.5">
+              {[
+                { icon: '🔍', label: 'Past Insight', key: 'past_insight' },
+                { icon: '📊', label: 'Present Pacing', key: 'present_pacing' },
+                { icon: '🎯', label: 'Future Action', key: 'future_action' },
+              ].map(({ icon, label, key }) => (
+                <div key={key} className="bg-[#111] border border-[#2C2C2E] rounded-2xl p-4 flex gap-3">
+                  <span className="text-lg shrink-0 mt-0.5">{icon}</span>
+                  <div>
+                    <p className="text-[9px] font-bold text-gray-600 tracking-widest uppercase mb-1">{label}</p>
+                    <p className="text-gray-200 text-sm leading-relaxed">{reportData?.advice?.[key]}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <p className="text-[10px] font-bold text-gray-600 tracking-widest uppercase mb-3">TRANSACTIONS</p>
+            <div className="bg-[#111] border border-[#2C2C2E] rounded-2xl overflow-hidden">
+              {reportData?.categorized_items?.map((t, i) => {
+                const badges = {
+                  Essential: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30',
+                  Standard: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
+                  Luxury: 'bg-purple-500/15 text-purple-400 border-purple-500/30',
+                  Income: 'bg-green-500/15 text-green-400 border-green-500/30',
+                };
+                const badgeCls = badges[t.category] || 'bg-gray-700/50 text-gray-400 border-gray-600';
+                const isLast = i === reportData.categorized_items.length - 1;
+                return (
+                  <div key={i} onClick={() => setSelectedTxIndex(i)}
+                    className={`flex items-center justify-between px-4 py-3 hover:bg-[#1C1C1E] transition cursor-pointer ${!isLast ? 'border-b border-[#1C1C1E]' : ''}`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-full bg-[#1C1C1E] flex items-center justify-center text-base shrink-0 border border-[#2C2C2E]">
+                        {getIconForMerchant(t.merchant).icon}
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold text-white truncate max-w-[110px]">{t.merchant}</p>
+                        <p className="text-[11px] text-gray-600">{t.date}</p>
+                      </div>
+                    </div>
+                    <div className="flex flex-col items-end gap-1 shrink-0">
+                      <p className={`text-sm font-bold ${parseFloat(t.amount) > 0 ? 'text-green-400' : 'text-white'}`}>
+                        {parseFloat(t.amount) > 0 ? '+' : ''}€{Math.abs(parseFloat(t.amount)).toFixed(2)}
+                      </p>
+                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full border ${badgeCls}`}>{t.category}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        {selectedTxIndex !== null && (
+          <>
+            <div className="absolute inset-0 bg-black/70 z-[55]" onClick={() => setSelectedTxIndex(null)}></div>
+            <div className="absolute inset-x-0 bottom-0 bg-[#1C1C1E] border-t border-[#2C2C2E] rounded-t-3xl p-5 z-[60]">
+              <div className="w-8 h-1 bg-[#3C3C3E] rounded-full mx-auto mb-4"></div>
+              <p className="text-[10px] font-bold text-gray-600 tracking-widest uppercase mb-1">Change Category</p>
+              <h3 className="text-white text-base font-bold mb-4">{reportData.categorized_items[selectedTxIndex]?.merchant}</h3>
+              <div className="flex flex-col gap-2">
+                {[
+                  { label: 'Income', cls: 'border-green-500/40 text-green-400 hover:bg-green-500/10' },
+                  { label: 'Essential', cls: 'border-cyan-500/40 text-cyan-400 hover:bg-cyan-500/10' },
+                  { label: 'Standard', cls: 'border-blue-500/40 text-blue-400 hover:bg-blue-500/10' },
+                  { label: 'Luxury', cls: 'border-purple-500/40 text-purple-400 hover:bg-purple-500/10' },
+                ].map(({ label, cls }) => (
+                  <button key={label} onClick={() => handleCategoryChange(label)}
+                    className={`w-full bg-black border ${cls} font-semibold py-3 rounded-xl transition-colors text-sm`}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    );
   };
 
   // ── Tabs ──────────────────────────────────────────────
@@ -528,6 +800,20 @@ export default function App() {
     <div className="flex items-center justify-center min-h-screen bg-gray-900">
       <div className="app-container">
         {(tabs[currentTab] || renderHome)()}
+
+        {/* F.R. floating button — visible on home tab only */}
+        {currentTab === 'home' && !showReportModal && (
+          <button
+            onClick={() => { setReportReady(false); setShowReportModal(true); }}
+            className="absolute bottom-28 right-4 flex items-center gap-2 pl-1.5 pr-4 py-1.5 bg-gradient-to-r from-[#FF8C00] to-[#AF52DE] rounded-full shadow-[0_6px_24px_rgba(175,82,222,0.45)] transition-all transform hover:scale-105 active:scale-95 z-40 border border-white/10"
+          >
+            <div className="w-9 h-9 rounded-full bg-black/25 flex items-center justify-center text-white text-sm font-bold shrink-0">F</div>
+            <span className="text-white font-semibold text-sm tracking-wide">Report</span>
+          </button>
+        )}
+
+        {/* F.R. modal layer */}
+        {showReportModal && renderReportModal()}
 
         {receiptTxId && (
           <ReceiptUpload

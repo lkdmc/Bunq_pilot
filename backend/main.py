@@ -185,7 +185,7 @@ def get_all_transactions(limit=50):
     conn = sqlite3.connect("spending.db")
     c = conn.cursor()
     c.execute("""
-        SELECT date, counterparty, description, amount, currency, category
+        SELECT id, date, counterparty, description, amount, currency, category
         FROM transactions
         ORDER BY date DESC
         LIMIT ?
@@ -307,8 +307,8 @@ async def api_transactions():
     rows = get_all_transactions(limit=20)
     if rows:
         return [
-            {"date": r[0], "merchant": r[1], "desc": r[2],
-             "amount": str(r[3]), "currency": r[4], "category": r[5]}
+            {"id": r[0], "date": r[1], "merchant": r[2], "desc": r[3],
+             "amount": str(r[4]), "currency": r[5], "category": r[6]}
             for r in rows
         ]
     return get_recent_transactions()
@@ -316,6 +316,82 @@ async def api_transactions():
 class MessageInput(BaseModel):
     message: str
     history: List[Dict[str, Any]] = []
+
+class AnalyzeRequest(BaseModel):
+    transactions: List[Dict[str, Any]]
+    user_preference: Dict[str, Any]
+
+ANALYZE_SYSTEM_PROMPT = """[Role]
+You are 'F.R' (Financial Report), a highly personalized AI financial assistant. Your job is to meticulously analyze the user's transaction history and provide friendly, yet professional and actionable financial advice.
+
+[Core Definitions: The Spending/Income Categories]
+1. Essential: Expenditures strictly necessary for survival and basic living (e.g., groceries, rice, eggs, transportation, medical bills, utilities).
+2. Standard: Everyday expenditures to maintain a reasonable quality of life (e.g., casual dining, daily coffee, light hobbies, snacks).
+3. Luxury: Reward-based or excessive expenditures that can be easily controlled or reduced (e.g., alcohol, luxury hotels, fine dining, designer brands, excessive food delivery).
+4. Income: Any incoming money, deposits, top-ups, or salary. If the 'amount' is a POSITIVE number, it MUST be classified as Income.
+
+[Task Steps: You MUST follow this Chain of Thought]
+Step 1. Check if there are any predefined categories in the 'user_preference'. If a merchant exists in this list, you MUST strictly categorize it according to the user's preference, overriding general knowledge.
+Step 2. Iterate through the provided 'transactions' array and accurately classify each item. If the amount is positive (no minus sign), classify it as 'Income'. Otherwise, classify it into either Essential, Standard, or Luxury.
+Step 3. Calculate the total amount and percentage for each category. (Keep this calculation internal for your reasoning).
+Step 4. Based on the calculated ratios and spending patterns, write a single-line summary and generate actionable advice for the past, present, and future. The tone should be professional, encouraging, and empathetic.
+
+[Rules for Advice]
+- past_insight: Highlight the largest spending category or a notable spending habit (e.g., Luxury). (1-2 sentences)
+- present_pacing: Evaluate their current spending pace and provide positive encouragement. (1-2 sentences)
+- future_action: Suggest a specific "actionable guideline" on what to reduce for the rest of the month. (1-2 sentences)
+
+[Output Format]
+You MUST output the response in the strict JSON format below. Do NOT output any conversational text, greetings, or markdown blocks outside of this JSON.
+CRITICAL: All generated text MUST be written in English.
+
+{
+  "summary_headline": "A one-sentence overall review of this month's spending.",
+  "advice": {
+    "past_insight": "...",
+    "present_pacing": "...",
+    "future_action": "..."
+  },
+  "categorized_items": [
+    {
+      "date": "YYYY-MM-DD",
+      "merchant": "Merchant Name",
+      "amount": Number,
+      "category": "Essential" | "Standard" | "Luxury" | "Income"
+    }
+  ]
+}"""
+
+@app.post("/api/analyze")
+async def analyze_transactions(req: AnalyzeRequest):
+    if not anthropic_client:
+        raise HTTPException(status_code=500, detail="Anthropic API Key is not configured.")
+
+    user_prompt = f"User Preference: {req.user_preference}\nTransactions: {json.dumps(req.transactions)}"
+
+    try:
+        response = anthropic_client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1500,
+            system=ANALYZE_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_prompt}]
+        )
+
+        text_resp = response.content[0].text.strip()
+        if text_resp.startswith("```json"):
+            text_resp = text_resp.split("```json")[1]
+            if text_resp.endswith("```"):
+                text_resp = text_resp[:-3]
+        elif text_resp.startswith("```"):
+            text_resp = text_resp.split("```")[1]
+            if text_resp.endswith("```"):
+                text_resp = text_resp[:-3]
+
+        return json.loads(text_resp.strip())
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to parse Claude JSON response: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/chat")
 async def chat_with_finn(input_data: MessageInput):
@@ -325,7 +401,7 @@ async def chat_with_finn(input_data: MessageInput):
     rows = get_all_transactions(limit=20)
     if rows:
         transactions_text = "\n".join(
-            f"- {r[0]} | {r[1]} ({r[2]}): €{r[3]} {r[4]} [{r[5]}]"
+            f"- {r[1]} | {r[2]} ({r[3]}): €{r[4]} {r[5]} [{r[6]}]"
             for r in rows
         )
     else:
