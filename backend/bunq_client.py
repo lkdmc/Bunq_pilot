@@ -45,6 +45,7 @@ def get_recent_transactions(limit=10):
             desc = p.description if p.description else "No description"
             
             formatted_tx.append({
+                "id": p.id_,
                 "date": date,
                 "amount": amount,
                 "currency": currency,

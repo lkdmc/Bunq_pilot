@@ -49,3 +49,4 @@ yarn-error.log*
 *.swo
 backend/bunq.conf
 bunq.conf
+*.db

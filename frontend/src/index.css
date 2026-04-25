@@ -94,6 +94,16 @@ body {
   40% { transform: scale(1); }
 }
 
+@keyframes scan-line {
+  0% { transform: translateY(-100%); }
+  50% { transform: translateY(100%); }
+  100% { transform: translateY(-100%); }
+}
+
+.animate-scan {
+  animation: scan-line 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
 .bottom-nav {
   position: absolute;
   bottom: 0;
