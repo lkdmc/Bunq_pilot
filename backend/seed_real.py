@@ -179,8 +179,8 @@ if __name__ == "__main__":
 
     print(f"\nTotal spend to seed: €{total_spend:.2f}")
     print("Requesting top-up from Sugar Daddy (10 × €9,999)...")
-    for _ in range(10):
-        request_topup(account_id, 9999.0)
+    for _ in range(100):
+        request_topup(account_id, 400.0)
     print("Waiting 5s for Sugar Daddy to process...")
     time.sleep(5)
 
