@@ -166,7 +166,7 @@ if __name__ == "__main__":
     account_id = setup()
     print(f"Account ID: {account_id}")
 
-    months = [(y, m) for y in [2024, 2025] for m in range(1, 13)]
+    months = [(2025, m) for m in range(4, 13)]
     months += [(2026, m) for m in range(1, 5)]
 
     # Calculate total spend to request upfront
@@ -179,13 +179,12 @@ if __name__ == "__main__":
 
     print(f"\nTotal spend to seed: €{total_spend:.2f}")
     print("Requesting €1,000,000 top-up from Sugar Daddy (10 × €99,999)...")
-    for i in range(10):
+    for _ in range(10):
         request_topup(account_id, 99999.99)
-        time.sleep(1.0)  # give Sugar Daddy time between each request
-    print("Waiting 30s for Sugar Daddy to credit all funds...")
-    time.sleep(30)
+    print("Waiting 5s for Sugar Daddy to process...")
+    time.sleep(5)
 
-    print(f"\nStarting payments — Jan 2024 → Apr 2026")
+    print(f"\nStarting payments — Apr 2025 → Apr 2026")
     print("(~6 min estimated, press Ctrl+C to stop)\n")
 
     for year, month in months:
