@@ -1,4 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
+import FinancialReport from './components/FinancialReport';
+import ReceiptUpload from './components/ReceiptUpload';
+import { Camera } from 'lucide-react';
 
 const getIconForMerchant = (merchant) => {
   if (merchant.includes('Starbucks')) return { icon: '☕', bg: 'bg-green-900', text: 'text-green-400' };
@@ -23,6 +26,7 @@ export default function App() {
   const [subsLoading, setSubsLoading] = useState(false);
   const [forecast, setForecast] = useState(null);
   const [forecastLoading, setForecastLoading] = useState(false);
+  const [activeTxForReceipt, setActiveTxForReceipt] = useState(null);
   const chatBoxRef = useRef(null);
 
   useEffect(() => {
@@ -164,15 +168,33 @@ export default function App() {
                     <p className="text-xs text-gray-400">{t.desc || t.date}</p>
                   </div>
                 </div>
-                <p className={`text-[16px] font-bold ${isExpense ? 'text-white' : 'text-blue-500'}`}>
-                  {isExpense ? '' : '+'}€ {t.amount.replace('-', '')}
-                </p>
+                <div className="flex items-center gap-3">
+                  <p className={`text-[16px] font-bold ${isExpense ? 'text-white' : 'text-blue-500'}`}>
+                    {isExpense ? '' : '+'}€ {t.amount.replace('-', '')}
+                  </p>
+                  {isExpense && t.id && (
+                    <button 
+                      onClick={() => setActiveTxForReceipt(t.id)}
+                      className="p-1.5 bg-gray-800 hover:bg-blue-600 rounded-full text-gray-400 hover:text-white transition"
+                    >
+                      <Camera size={14} />
+                    </button>
+                  )}
+                </div>
               </div>
             );
           })}
           {transactions.length === 0 && <div className="p-4 text-center text-gray-500 text-sm">No recent transactions</div>}
         </div>
       </div>
+      
+      {activeTxForReceipt && (
+        <ReceiptUpload 
+          txId={activeTxForReceipt} 
+          onClose={() => setActiveTxForReceipt(null)}
+          onUploadSuccess={() => console.log('Upload success')}
+        />
+      )}
     </div>
   );
 
@@ -407,6 +429,7 @@ export default function App() {
     subs: renderSubs,
     forecast: renderForecast,
     ai: renderChat,
+    report: () => <FinancialReport />,
   };
 
   return (
@@ -426,6 +449,10 @@ export default function App() {
           <div className={`nav-item ${currentTab === 'forecast' ? 'active' : ''}`} onClick={() => setCurrentTab('forecast')}>
             <svg fill={currentTab === 'forecast' ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>
             <span>Forecast</span>
+          </div>
+          <div className={`nav-item ${currentTab === 'report' ? 'active' : ''}`} onClick={() => setCurrentTab('report')}>
+            <svg fill={currentTab === 'report' ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
+            <span>Report</span>
           </div>
           <div className={`nav-item ${currentTab === 'ai' ? 'active' : ''}`} onClick={() => setCurrentTab('ai')}>
             <svg fill={currentTab === 'ai' ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>

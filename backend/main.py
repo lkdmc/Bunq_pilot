@@ -5,7 +5,8 @@ import re
 import calendar
 from datetime import datetime
 from collections import deque
-from fastapi import FastAPI, Request, HTTPException
+import base64
+from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -13,6 +14,7 @@ from typing import List, Dict, Any, Tuple, Optional
 import anthropic
 from dotenv import load_dotenv
 from bunq_client import get_recent_transactions, get_balance as get_balance_from_sdk
+from bunq_client import get_recent_transactions, get_payment_attachments
 
 load_dotenv()
 
@@ -68,6 +70,17 @@ def init_db():
             balance REAL,
             currency TEXT,
             updated_at TEXT
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS receipt_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            transaction_id TEXT,
+            name TEXT,
+            category TEXT,
+            subcategory TEXT,
+            amount REAL,
+            FOREIGN KEY(transaction_id) REFERENCES transactions(id)
         )
     """)
     conn.commit()
@@ -185,7 +198,7 @@ def get_all_transactions(limit=50):
     conn = sqlite3.connect("spending.db")
     c = conn.cursor()
     c.execute("""
-        SELECT date, counterparty, description, amount, currency, category
+        SELECT date, counterparty, description, amount, currency, category, id
         FROM transactions
         ORDER BY date DESC
         LIMIT ?
@@ -202,6 +215,33 @@ def get_available_months() -> List[Tuple[int, int]]:
     conn.close()
     return rows
 
+@app.get("/api/transactions/{payment_id}/attachments")
+async def api_payment_attachments(payment_id: int, monetary_account_id: int = None):
+    """
+    Returns base64-encoded attachments for a single payment.
+    Frontend can render them as <img src="data:{content_type};base64,{data_b64}" />
+    """
+    attachments = get_payment_attachments(payment_id, monetary_account_id)
+    return attachments   # list of { id, content_type, data_b64 }
+ 
+ 
+@app.get("/api/transactions/{payment_id}/attachments/{attachment_id}/raw")
+async def api_attachment_raw(payment_id: int, attachment_id: int, monetary_account_id: int = None):
+    """
+    Streams the raw binary so the browser can open/download it directly.
+    """
+    from fastapi.responses import Response
+ 
+    attachments = get_payment_attachments(payment_id, monetary_account_id)
+    match = next((a for a in attachments if a["id"] == attachment_id), None)
+ 
+    if not match:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+ 
+    import base64
+    raw = base64.b64decode(match["data_b64"])
+    return Response(content=raw, media_type=match["content_type"])
+ 
 # ── Webhook ───────────────────────────────────────────
 @app.post("/webhook")
 async def receive_webhook(request: Request):
@@ -263,7 +303,7 @@ async def api_transactions():
     if rows:
         return [
             {"date": r[0], "merchant": r[1], "desc": r[2],
-             "amount": str(r[3]), "currency": r[4], "category": r[5]}
+             "amount": str(r[3]), "currency": r[4], "category": r[5], "id": r[6]}
             for r in rows
         ]
     return get_recent_transactions()
@@ -308,6 +348,136 @@ async def chat_with_finn(input_data: MessageInput):
         return {"response": response.content[0].text}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# ── Receipts & AI Analysis ────────────────────────────
+@app.post("/api/transactions/{tx_id}/receipt")
+async def upload_receipt(tx_id: str, file: UploadFile = File(...)):
+    if not anthropic_client:
+        raise HTTPException(status_code=500, detail="Anthropic API Key not configured.")
+    
+    contents = await file.read()
+    b64_image = base64.b64encode(contents).decode("utf-8")
+    media_type = file.content_type or "image/jpeg"
+    
+    prompt = """Analyze this receipt and break down the items. Categorize each item into one of the following main categories:
+- Groceries / Supermarket
+- Shopping / Clothing & Apparel
+- Health & Personal Care
+- Entertainment & Tech
+- Restaurants / Dining Out
+- Other
+
+Then, subcategorize each item into ONE of:
+- Essential
+- Standard
+- Luxury
+
+Format your response as a JSON array of objects, where each object has:
+- "name" (string)
+- "category" (string)
+- "subcategory" (string)
+- "amount" (number)
+
+Do not include any other text, just the raw JSON array."""
+
+    try:
+        response = anthropic_client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=1024,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": b64_image
+                            }
+                        },
+                        {
+                            "type": "text",
+                            "text": prompt
+                        }
+                    ]
+                }
+            ]
+        )
+        # Parse JSON from Claude's response
+        text_resp = response.content[0].text.strip()
+        # sometimes it wraps in ```json
+        if text_resp.startswith("```json"):
+            text_resp = text_resp[7:]
+        if text_resp.endswith("```"):
+            text_resp = text_resp[:-3]
+        
+        items = json.loads(text_resp.strip())
+        
+        conn = sqlite3.connect("spending.db")
+        c = conn.cursor()
+        for item in items:
+            c.execute("""
+                INSERT INTO receipt_items (transaction_id, name, category, subcategory, amount)
+                VALUES (?, ?, ?, ?, ?)
+            """, (tx_id, item.get("name"), item.get("category"), item.get("subcategory"), item.get("amount")))
+        conn.commit()
+        conn.close()
+        
+        return {"status": "ok", "items": items}
+        
+    except Exception as e:
+        log(f"Error processing receipt: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/receipts/report")
+async def api_receipts_report():
+    conn = sqlite3.connect("spending.db")
+    c = conn.cursor()
+    c.execute("""
+        SELECT category, subcategory, SUM(amount) as total
+        FROM receipt_items
+        GROUP BY category, subcategory
+    """)
+    rows = c.fetchall()
+    
+    # get raw items for the prompt
+    c.execute("SELECT name, category, subcategory, amount FROM receipt_items ORDER BY id DESC LIMIT 50")
+    recent_items = c.fetchall()
+    conn.close()
+    
+    breakdown = []
+    for r in rows:
+        breakdown.append({
+            "category": r[0],
+            "subcategory": r[1],
+            "total": round(r[2], 2)
+        })
+        
+    advice = "No receipt data available yet."
+    if breakdown and anthropic_client:
+        items_text = "\n".join([f"- {i[0]} ({i[1]} / {i[2]}): €{i[3]:.2f}" for i in recent_items])
+        prompt = f"""You are Finn, a smart financial advisor. Look at this recent itemized receipt spending:
+        
+{items_text}
+
+Provide 3 short, punchy tips about their subcategory spending (Essential vs Standard vs Luxury) and suggest areas to cut back. Keep it under 4 sentences total. Use emojis."""
+        
+        try:
+            msg = anthropic_client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=200,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            advice = msg.content[0].text.strip()
+        except Exception as e:
+            log(f"Error getting receipt advice: {e}")
+            
+    return {
+        "breakdown": breakdown,
+        "advice": advice
+    }
+
 
 # ── Subscription Detective ────────────────────────────
 def detect_subscriptions() -> list:

@@ -70,3 +70,47 @@ def get_recent_transactions(limit=10):
     except Exception as e:
         print(f"Error fetching bunq transactions: {e}")
         return []
+        
+def get_payment_attachments(payment_id: int, monetary_account_id: int = None):
+    """
+    Returns a list of attachments for a given payment.
+    Each item: { "id": int, "content_type": str, "data_b64": str }
+    """
+    if not setup_bunq():
+        return []
+ 
+    try:
+        user_context = BunqContext.user_context()
+        if monetary_account_id is None:
+            monetary_account_id = user_context.primary_monetary_account.id_
+ 
+        # Step 1: list the attachment metadata for this payment
+        attachments = AttachmentMonetaryAccount.list(
+            monetary_account_id=monetary_account_id,
+            payment_id=payment_id,
+        )
+ 
+        results = []
+        for att in attachments.value:
+            att_id = att.id_
+ 
+            # Step 2: fetch binary content for each attachment
+            content_response = AttachmentMonetaryAccountContent.list(
+                monetary_account_id=monetary_account_id,
+                attachment_monetary_account_id=att_id,
+            )
+ 
+            raw_bytes = content_response.value  # bytes
+            content_type = getattr(content_response, "content_type", "application/octet-stream")
+ 
+            results.append({
+                "id": att_id,
+                "content_type": content_type,
+                "data_b64": base64.b64encode(raw_bytes).decode("utf-8"),
+            })
+ 
+        return results
+ 
+    except Exception as e:
+        print(f"Error fetching attachments for payment {payment_id}: {e}")
+        return []
