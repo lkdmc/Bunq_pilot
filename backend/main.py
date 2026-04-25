@@ -456,6 +456,8 @@ async def request_money(input_data: RequestMoneyInput):
     user_id = os.getenv("BUNQ_USER_ID", "")
     account_id = os.getenv("BUNQ_MONETARY_ACCOUNT_ID", "")
     key_path = os.getenv("BUNQ_PRIVATE_KEY_PATH", "private.pem")
+    if not os.path.isabs(key_path):
+        key_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), key_path)
 
     if not session_token or not user_id or not account_id:
         raise HTTPException(status_code=503, detail="bunq credentials not configured.")

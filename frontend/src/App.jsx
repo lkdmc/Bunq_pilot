@@ -31,19 +31,21 @@ export default function App() {
   const [addMoneyLoading, setAddMoneyLoading] = useState(false);
   const [addMoneyResult, setAddMoneyResult] = useState(null);
   const [txLimit, setTxLimit] = useState(5);
+  const [refreshing, setRefreshing] = useState(false);
   const chatBoxRef = useRef(null);
 
-  useEffect(() => {
-    fetch('http://127.0.0.1:8000/api/transactions')
-      .then(res => res.json())
-      .then(data => setTransactions(data))
-      .catch(err => console.error('Failed to fetch transactions:', err));
+  const fetchHomeData = () => {
+    setRefreshing(true);
+    Promise.all([
+      fetch('http://127.0.0.1:8000/api/transactions').then(r => r.json()),
+      fetch('http://127.0.0.1:8000/api/balance').then(r => r.json()),
+    ]).then(([txData, balData]) => {
+      setTransactions(txData);
+      if (balData.balance !== null) setAccountBalance(balData.balance);
+    }).catch(() => {}).finally(() => setRefreshing(false));
+  };
 
-    fetch('http://127.0.0.1:8000/api/balance')
-      .then(res => res.json())
-      .then(data => { if (data.balance !== null) setAccountBalance(data.balance); })
-      .catch(() => {});
-  }, []);
+  useEffect(() => { fetchHomeData(); }, []);
 
   useEffect(() => {
     if (currentTab === 'subs' && subscriptions.length === 0) {
@@ -128,8 +130,10 @@ export default function App() {
         <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center overflow-hidden border border-gray-700">
           <span className="text-xl">🐜</span>
         </div>
-        <div className="flex gap-4 text-gray-300">
-          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4h4v4H4zM16 4h4v4h-4zM4 16h4v4H4zM14 16h6v6h-6zM10 4v4M14 4v4M10 20v-4M10 10h4v4h-4z" /></svg>
+        <div className="flex gap-4 text-gray-300 items-center">
+          <button onClick={fetchHomeData} disabled={refreshing} className="text-gray-300 disabled:opacity-40 transition">
+            <svg className={`w-6 h-6 ${refreshing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+          </button>
           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
         </div>
       </div>
