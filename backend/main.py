@@ -12,6 +12,8 @@ from typing import List, Dict, Any
 import anthropic
 from dotenv import load_dotenv
 from bunq_client import get_recent_transactions
+from bunq_client import get_recent_transactions, get_payment_attachments
+
 
 load_dotenv()
 
@@ -93,6 +95,34 @@ Category:"""
         messages=[{"role": "user", "content": prompt}]
     )
     return message.content[0].text.strip()
+
+@app.get("/api/transactions/{payment_id}/attachments")
+async def api_payment_attachments(payment_id: int, monetary_account_id: int = None):
+    """
+    Returns base64-encoded attachments for a single payment.
+    Frontend can render them as <img src="data:{content_type};base64,{data_b64}" />
+    """
+    attachments = get_payment_attachments(payment_id, monetary_account_id)
+    return attachments   # list of { id, content_type, data_b64 }
+ 
+ 
+@app.get("/api/transactions/{payment_id}/attachments/{attachment_id}/raw")
+async def api_attachment_raw(payment_id: int, attachment_id: int, monetary_account_id: int = None):
+    """
+    Streams the raw binary so the browser can open/download it directly.
+    """
+    from fastapi.responses import Response
+ 
+    attachments = get_payment_attachments(payment_id, monetary_account_id)
+    match = next((a for a in attachments if a["id"] == attachment_id), None)
+ 
+    if not match:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+ 
+    import base64
+    raw = base64.b64decode(match["data_b64"])
+    return Response(content=raw, media_type=match["content_type"])
+ 
 
 def save_transaction(tx_id, date_str, amount, currency, description, counterparty, category):
     dt = datetime.fromisoformat(date_str[:10])
