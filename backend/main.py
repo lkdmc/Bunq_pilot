@@ -316,6 +316,8 @@ def sync_from_bunq(limit: int = 20) -> int:
             amount = float(t["amount"])
         except (ValueError, TypeError):
             amount = 0.0
+        if amount >= 0:  # Skip incoming payments, consistent with webhook handler
+            continue
         desc = t.get("desc", "")
         counterparty = t.get("merchant", "Unknown")
         if counterparty.lower() in ("sugar daddy", ""):
