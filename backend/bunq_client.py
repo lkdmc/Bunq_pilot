@@ -98,7 +98,7 @@ def get_recent_transactions(limit=10):
         return []
     try:
         account_id = BunqContext.user_context().primary_monetary_account.id_
-        payments = Payment.list(monetary_account_id=account_id, count=limit)
+        payments = Payment.list(monetary_account_id=account_id, params={'count': limit})
         formatted_tx = []
         for p in payments.value:
             amount = p.amount.value if p.amount else "0.00"
