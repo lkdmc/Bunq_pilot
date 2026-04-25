@@ -514,9 +514,15 @@ def detect_subscriptions() -> list:
     rows = c.fetchall()
     conn.close()
 
+    log(f"detect_subscriptions: {len(rows)} outgoing transactions found")
+
     by_counterparty = defaultdict(list)
     for counterparty, date, amount in rows:
         by_counterparty[counterparty].append((datetime.fromisoformat(date), abs(amount)))
+
+    log(f"detect_subscriptions: {len(by_counterparty)} unique counterparties")
+    multi = {k: v for k, v in by_counterparty.items() if len(v) >= 2}
+    log(f"detect_subscriptions: {len(multi)} counterparties with 2+ payments: {list(multi.keys())}")
 
     result = []
     for counterparty, payments in by_counterparty.items():
@@ -535,20 +541,26 @@ def detect_subscriptions() -> list:
             frequency = "quarterly"
             annual_multiplier = 4
         else:
+            log(f"  SKIP {counterparty}: intervals {intervals} not monthly/quarterly")
             continue
 
         # Amount variance within 10%
         avg_amount = sum(amounts) / len(amounts)
         if avg_amount == 0:
             continue
-        if max(abs(a - avg_amount) / avg_amount for a in amounts) > 0.10:
+        variance = max(abs(a - avg_amount) / avg_amount for a in amounts)
+        if variance > 0.10:
+            log(f"  SKIP {counterparty}: amount variance {variance:.1%} > 10%")
             continue
 
         # Day of month variance within 10 days
         days_of_month = [d.day for d in dates]
-        if max(days_of_month) - min(days_of_month) > 10:
+        dom_spread = max(days_of_month) - min(days_of_month)
+        if dom_spread > 10:
+            log(f"  SKIP {counterparty}: day-of-month spread {dom_spread} > 10")
             continue
 
+        log(f"  ACCEPT {counterparty}: {frequency}, avg €{avg_amount:.2f}")
         result.append({
             "counterparty": counterparty,
             "count": len(payments),
