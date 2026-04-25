@@ -328,7 +328,11 @@ def sync_from_bunq(limit: int = 20) -> int:
         if counterparty.lower() in ("sugar daddy", ""):
             counterparty = extract_merchant_from_description(desc) or counterparty
         category = classify(counterparty, desc)
-        date_str = t.get("date", datetime.now().strftime("%Y-%m-%d"))
+        raw_date = t.get("date", datetime.now().strftime("%Y-%m-%d"))
+        # Prefer date embedded in description (e.g. "Netflix 14-01-2024") over
+        # the bunq API's `created` timestamp, which reflects server ingestion
+        # time rather than the actual payment date in sandbox environments.
+        date_str = parse_date_from_description(desc, raw_date)
         try:
             dt = datetime.fromisoformat(date_str[:10])
         except ValueError:
@@ -514,9 +518,15 @@ def detect_subscriptions() -> list:
     rows = c.fetchall()
     conn.close()
 
+    log(f"detect_subscriptions: {len(rows)} outgoing transactions found")
+
     by_counterparty = defaultdict(list)
     for counterparty, date, amount in rows:
         by_counterparty[counterparty].append((datetime.fromisoformat(date), abs(amount)))
+
+    log(f"detect_subscriptions: {len(by_counterparty)} unique counterparties")
+    multi = {k: v for k, v in by_counterparty.items() if len(v) >= 2}
+    log(f"detect_subscriptions: {len(multi)} counterparties with 2+ payments: {list(multi.keys())}")
 
     result = []
     for counterparty, payments in by_counterparty.items():
@@ -535,20 +545,26 @@ def detect_subscriptions() -> list:
             frequency = "quarterly"
             annual_multiplier = 4
         else:
+            log(f"  SKIP {counterparty}: intervals {intervals} not monthly/quarterly")
             continue
 
         # Amount variance within 10%
         avg_amount = sum(amounts) / len(amounts)
         if avg_amount == 0:
             continue
-        if max(abs(a - avg_amount) / avg_amount for a in amounts) > 0.10:
+        variance = max(abs(a - avg_amount) / avg_amount for a in amounts)
+        if variance > 0.10:
+            log(f"  SKIP {counterparty}: amount variance {variance:.1%} > 10%")
             continue
 
         # Day of month variance within 10 days
         days_of_month = [d.day for d in dates]
-        if max(days_of_month) - min(days_of_month) > 10:
+        dom_spread = max(days_of_month) - min(days_of_month)
+        if dom_spread > 10:
+            log(f"  SKIP {counterparty}: day-of-month spread {dom_spread} > 10")
             continue
 
+        log(f"  ACCEPT {counterparty}: {frequency}, avg €{avg_amount:.2f}")
         result.append({
             "counterparty": counterparty,
             "count": len(payments),
@@ -559,6 +575,35 @@ def detect_subscriptions() -> list:
         })
 
     return sorted(result, key=lambda x: -x["avg_amount"])
+
+@app.post("/api/admin/fix-dates")
+async def fix_dates(request: Request):
+    """One-time migration: re-parse transaction dates from description for rows
+    where the date was incorrectly stored as the bunq API ingestion timestamp."""
+    if ADMIN_SECRET and request.headers.get("X-Admin-Secret") != ADMIN_SECRET:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    conn = sqlite3.connect("spending.db")
+    c = conn.cursor()
+    c.execute("SELECT id, date, description FROM transactions")
+    rows = c.fetchall()
+    updated = 0
+    for tx_id, stored_date, description in rows:
+        better_date = parse_date_from_description(description, stored_date)
+        if better_date != stored_date:
+            try:
+                dt = datetime.fromisoformat(better_date)
+                c.execute(
+                    "UPDATE transactions SET date=?, year=?, month=? WHERE id=?",
+                    (better_date, dt.year, dt.month, tx_id),
+                )
+                updated += 1
+            except ValueError:
+                pass
+    conn.commit()
+    conn.close()
+    log(f"fix-dates: updated {updated} transaction dates from descriptions")
+    return {"fixed": updated}
+
 
 @app.post("/api/admin/fix-counterparties")
 async def fix_counterparties(request: Request):
@@ -710,6 +755,68 @@ Provide 3 short, punchy tips about their subcategory spending (Essential vs Stan
             log(f"Error getting receipt advice: {e}")
 
     return {"breakdown": breakdown, "advice": advice}
+
+
+@app.get("/api/debug/subscriptions")
+async def debug_subscriptions():
+    """Returns why each counterparty was accepted or rejected as a subscription."""
+    conn = sqlite3.connect("spending.db")
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM transactions WHERE amount < 0")
+    total_outgoing = c.fetchone()[0]
+    c.execute("SELECT counterparty, date, amount FROM transactions WHERE amount < 0 ORDER BY counterparty, date")
+    rows = c.fetchall()
+    conn.close()
+
+    by_counterparty = defaultdict(list)
+    for counterparty, date, amount in rows:
+        by_counterparty[counterparty].append((datetime.fromisoformat(date), abs(amount)))
+
+    all_dates = [datetime.fromisoformat(r[1]) for r in rows]
+    date_range = {
+        "earliest": min(all_dates).strftime("%Y-%m-%d") if all_dates else None,
+        "latest": max(all_dates).strftime("%Y-%m-%d") if all_dates else None,
+        "span_days": (max(all_dates) - min(all_dates)).days if all_dates else 0,
+    }
+    report = {"total_outgoing_transactions": total_outgoing, "date_range": date_range, "candidates": []}
+    for counterparty, payments in sorted(by_counterparty.items(), key=lambda x: -len(x[1])):
+        if len(payments) < 2:
+            continue
+        dates = [p[0] for p in payments]
+        amounts = [p[1] for p in payments]
+        intervals = [(dates[i+1] - dates[i]).days for i in range(len(dates) - 1)]
+        avg_amount = sum(amounts) / len(amounts) if amounts else 0
+        variance = max(abs(a - avg_amount) / avg_amount for a in amounts) if avg_amount else 0
+        dom = [d.day for d in dates]
+        dom_variance = max(dom) - min(dom)
+
+        if all(26 <= iv <= 38 for iv in intervals):
+            freq = "monthly"
+        elif all(78 <= iv <= 105 for iv in intervals):
+            freq = "quarterly"
+        else:
+            freq = None
+
+        reject_reasons = []
+        if freq is None:
+            reject_reasons.append(f"intervals not regular: {intervals}")
+        if variance > 0.10:
+            reject_reasons.append(f"amount variance {variance:.1%} > 10%")
+        if dom_variance > 10:
+            reject_reasons.append(f"day-of-month spread {dom_variance} > 10")
+
+        report["candidates"].append({
+            "counterparty": counterparty,
+            "count": len(payments),
+            "intervals": intervals,
+            "avg_amount": round(avg_amount, 2),
+            "amount_variance_pct": round(variance * 100, 1),
+            "dom_variance": dom_variance,
+            "status": "ACCEPTED" if not reject_reasons else "REJECTED",
+            "reject_reasons": reject_reasons,
+        })
+
+    return report
 
 
 @app.get("/api/subscriptions")
@@ -878,7 +985,7 @@ def dashboard():
 
     logs_html = "\n".join(reversed(list(log_buffer)))
 
-    html = f"""<!DOCTYPE html>
+    page_html = f"""<!DOCTYPE html>
 <html>
 <head>
     <title>bunq Spending Tracker — Debug</title>
@@ -939,7 +1046,7 @@ def dashboard():
     </div>
 </body>
 </html>"""
-    return html
+    return page_html
 
 @app.get("/report-page/{year}/{month}", response_class=HTMLResponse)
 def report_page(year: int, month: int):
