@@ -727,7 +727,13 @@ async def debug_subscriptions():
     for counterparty, date, amount in rows:
         by_counterparty[counterparty].append((datetime.fromisoformat(date), abs(amount)))
 
-    report = {"total_outgoing_transactions": total_outgoing, "candidates": []}
+    all_dates = [datetime.fromisoformat(r[1]) for r in rows]
+    date_range = {
+        "earliest": min(all_dates).strftime("%Y-%m-%d") if all_dates else None,
+        "latest": max(all_dates).strftime("%Y-%m-%d") if all_dates else None,
+        "span_days": (max(all_dates) - min(all_dates)).days if all_dates else 0,
+    }
+    report = {"total_outgoing_transactions": total_outgoing, "date_range": date_range, "candidates": []}
     for counterparty, payments in sorted(by_counterparty.items(), key=lambda x: -len(x[1])):
         if len(payments) < 2:
             continue
