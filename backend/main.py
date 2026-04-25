@@ -328,7 +328,11 @@ def sync_from_bunq(limit: int = 20) -> int:
         if counterparty.lower() in ("sugar daddy", ""):
             counterparty = extract_merchant_from_description(desc) or counterparty
         category = classify(counterparty, desc)
-        date_str = t.get("date", datetime.now().strftime("%Y-%m-%d"))
+        raw_date = t.get("date", datetime.now().strftime("%Y-%m-%d"))
+        # Prefer date embedded in description (e.g. "Netflix 14-01-2024") over
+        # the bunq API's `created` timestamp, which reflects server ingestion
+        # time rather than the actual payment date in sandbox environments.
+        date_str = parse_date_from_description(desc, raw_date)
         try:
             dt = datetime.fromisoformat(date_str[:10])
         except ValueError:
@@ -571,6 +575,35 @@ def detect_subscriptions() -> list:
         })
 
     return sorted(result, key=lambda x: -x["avg_amount"])
+
+@app.post("/api/admin/fix-dates")
+async def fix_dates(request: Request):
+    """One-time migration: re-parse transaction dates from description for rows
+    where the date was incorrectly stored as the bunq API ingestion timestamp."""
+    if ADMIN_SECRET and request.headers.get("X-Admin-Secret") != ADMIN_SECRET:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    conn = sqlite3.connect("spending.db")
+    c = conn.cursor()
+    c.execute("SELECT id, date, description FROM transactions")
+    rows = c.fetchall()
+    updated = 0
+    for tx_id, stored_date, description in rows:
+        better_date = parse_date_from_description(description, stored_date)
+        if better_date != stored_date:
+            try:
+                dt = datetime.fromisoformat(better_date)
+                c.execute(
+                    "UPDATE transactions SET date=?, year=?, month=? WHERE id=?",
+                    (better_date, dt.year, dt.month, tx_id),
+                )
+                updated += 1
+            except ValueError:
+                pass
+    conn.commit()
+    conn.close()
+    log(f"fix-dates: updated {updated} transaction dates from descriptions")
+    return {"fixed": updated}
+
 
 @app.post("/api/admin/fix-counterparties")
 async def fix_counterparties(request: Request):
