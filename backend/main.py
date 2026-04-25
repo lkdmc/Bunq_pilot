@@ -300,9 +300,12 @@ def sync_from_bunq(limit: int = 20) -> int:
     """Fetch recent payments from bunq SDK and store any new ones in spending.db.
     Returns number of newly inserted transactions."""
     live = get_recent_transactions(limit=limit)
+    log(f"sync_from_bunq: got {len(live)} transactions from bunq API")
     if not live:
         return 0
     new_count = 0
+    skipped_existing = 0
+    skipped_incoming = 0
     conn = sqlite3.connect("spending.db")
     c = conn.cursor()
     for t in live:
@@ -311,12 +314,15 @@ def sync_from_bunq(limit: int = 20) -> int:
             continue
         c.execute("SELECT 1 FROM transactions WHERE id = ?", (tx_id,))
         if c.fetchone():
+            skipped_existing += 1
             continue
         try:
             amount = float(t["amount"])
         except (ValueError, TypeError):
             amount = 0.0
         if amount >= 0:  # Skip incoming payments, consistent with webhook handler
+            skipped_incoming += 1
+            log(f"sync_from_bunq: skipping incoming tx id={tx_id} amount={amount} merchant={t.get('merchant')}")
             continue
         desc = t.get("desc", "")
         counterparty = t.get("merchant", "Unknown")
@@ -338,9 +344,7 @@ def sync_from_bunq(limit: int = 20) -> int:
             new_count += 1
     conn.commit()
     conn.close()
-    if new_count:
-        log(f"sync_from_bunq: inserted {new_count} new transactions")
-    return new_count
+    log(f"sync_from_bunq: new={new_count}, already_in_db={skipped_existing}, incoming_skipped={skipped_incoming}")
 
 # ── React API ─────────────────────────────────────────
 @app.get("/api/balance")

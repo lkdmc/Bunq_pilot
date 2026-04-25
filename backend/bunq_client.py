@@ -115,24 +115,30 @@ def _extract_display_name(alias) -> str:
 
 def get_recent_transactions(limit=10):
     if not setup_bunq():
+        print("[bunq] get_recent_transactions: setup_bunq() failed")
         return []
     try:
         account_id = BunqContext.user_context().primary_monetary_account.id_
+        print(f"[bunq] listing payments: account_id={account_id}, count={limit}")
         payments = Payment.list(monetary_account_id=account_id, params={'count': limit})
+        raw = payments.value
+        print(f"[bunq] raw payment count from API: {len(raw)}")
         formatted_tx = []
-        for p in payments.value:
+        for p in raw:
             amount = p.amount.value if p.amount else "0.00"
             currency = p.amount.currency if p.amount else "EUR"
             date = p.created.split(" ")[0] if p.created else "Unknown"
             merchant = _extract_display_name(p.counterparty_alias)
             desc = p.description or "No description"
+            print(f"[bunq]   id={p.id_} amount={amount} {currency} merchant={merchant!r}")
             formatted_tx.append({
                 "id": str(p.id_),
                 "date": date, "amount": amount, "currency": currency,
                 "merchant": merchant, "desc": desc,
             })
+        print(f"[bunq] returning {len(formatted_tx)} formatted transactions")
         return formatted_tx
     except Exception as e:
-        print(f"Error fetching bunq transactions: {e}")
+        print(f"[bunq] Error fetching transactions: {e}")
         _reset_bunq()  # Force re-init on next call in case of session expiry
         return []
