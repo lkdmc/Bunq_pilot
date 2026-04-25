@@ -179,10 +179,11 @@ if __name__ == "__main__":
 
     print(f"\nTotal spend to seed: €{total_spend:.2f}")
     print("Requesting €1,000,000 top-up from Sugar Daddy (10 × €99,999)...")
-    for _ in range(10):
+    for i in range(10):
         request_topup(account_id, 99999.99)
-    print("Waiting 5s for Sugar Daddy to process...")
-    time.sleep(5)
+        time.sleep(1.0)  # give Sugar Daddy time between each request
+    print("Waiting 30s for Sugar Daddy to credit all funds...")
+    time.sleep(30)
 
     print(f"\nStarting payments — Jan 2024 → Apr 2026")
     print("(~6 min estimated, press Ctrl+C to stop)\n")
