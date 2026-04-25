@@ -1,4 +1,5 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
+import { API_BASE } from '../config';
 
 const Upload = ({ size, className }) => (
   <svg className={className} width={size} height={size} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -32,9 +33,14 @@ export default function ReceiptUpload({ txId, onClose, onUploadSuccess }) {
   const [result, setResult] = useState(null);
   const fileInputRef = useRef(null);
 
+  useEffect(() => {
+    return () => { if (preview) URL.revokeObjectURL(preview); };
+  }, [preview]);
+
   const handleFileChange = (e) => {
     const selected = e.target.files[0];
     if (selected) {
+      if (preview) URL.revokeObjectURL(preview);
       setFile(selected);
       setPreview(URL.createObjectURL(selected));
     }
@@ -48,7 +54,7 @@ export default function ReceiptUpload({ txId, onClose, onUploadSuccess }) {
     formData.append('file', file);
 
     try {
-      const response = await fetch(`http://127.0.0.1:8000/api/transactions/${txId}/receipt`, {
+      const response = await fetch(`${API_BASE}/api/transactions/${txId}/receipt`, {
         method: 'POST',
         body: formData,
       });
@@ -107,7 +113,7 @@ export default function ReceiptUpload({ txId, onClose, onUploadSuccess }) {
                 <div className="relative rounded-xl overflow-hidden border border-[#2C2C2E] bg-black">
                   <img src={preview} alt="Receipt preview" className="w-full h-48 object-contain" />
                   <button
-                    onClick={() => { setFile(null); setPreview(null); }}
+                    onClick={() => { URL.revokeObjectURL(preview); setFile(null); setPreview(null); }}
                     className="absolute top-2 right-2 p-1.5 bg-black/60 rounded-full text-white backdrop-blur-md"
                   >
                     <X size={16} />

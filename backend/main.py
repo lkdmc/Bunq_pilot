@@ -1,10 +1,11 @@
+import html
 import sqlite3
 import json
 import os
 import re
 import calendar
 from datetime import datetime
-from collections import deque
+from collections import deque, defaultdict
 import base64
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,9 +18,7 @@ from bunq_client import get_recent_transactions, get_balance as get_balance_from
 
 load_dotenv(find_dotenv())
 
-# ── Diagnostic ────────────────────────────────────────
-_key = os.getenv("ANTHROPIC_API_KEY", "")
-print(f"[startup] ANTHROPIC_API_KEY: '{_key[:18]}...{_key[-4:]}' (len={len(_key)})")
+print("[startup] Anthropic API key: " + ("configured" if os.getenv("ANTHROPIC_API_KEY") else "NOT configured"))
 
 app = FastAPI()
 
@@ -33,6 +32,8 @@ app.add_middleware(
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
+
+ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
 
 FINN_SYSTEM_PROMPT = (
     "You are bunq's personal AI financial assistant, 'Finn'. "
@@ -84,6 +85,10 @@ def init_db():
             subcategory TEXT,
             amount REAL
         )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS budgets
+        (year INTEGER, month INTEGER, amount REAL, PRIMARY KEY (year, month))
     """)
     conn.commit()
     conn.close()
@@ -496,8 +501,6 @@ async def chat_with_finn(input_data: MessageInput):
 
 # ── Subscription Detective ────────────────────────────
 def detect_subscriptions() -> list:
-    from collections import defaultdict
-
     conn = sqlite3.connect("spending.db")
     c = conn.cursor()
     c.execute("SELECT counterparty, date, amount FROM transactions WHERE amount < 0 ORDER BY counterparty, date")
@@ -551,8 +554,10 @@ def detect_subscriptions() -> list:
     return sorted(result, key=lambda x: -x["avg_amount"])
 
 @app.post("/api/admin/fix-counterparties")
-async def fix_counterparties():
+async def fix_counterparties(request: Request):
     """One-time migration: fix transactions where counterparty='Sugar Daddy'."""
+    if ADMIN_SECRET and request.headers.get("X-Admin-Secret") != ADMIN_SECRET:
+        raise HTTPException(status_code=403, detail="Forbidden")
     conn = sqlite3.connect("spending.db")
     c = conn.cursor()
     c.execute("SELECT id, description FROM transactions WHERE counterparty = 'Sugar Daddy'")
@@ -572,6 +577,21 @@ async def fix_counterparties():
 
 # ── Receipt Upload & Report ───────────────────────────────────────────────────
 
+MAX_RECEIPT_BYTES = 10 * 1024 * 1024  # 10 MB
+
+def _detect_image_type(data: bytes) -> Optional[str]:
+    if len(data) < 12:
+        return None
+    if data[:3] == b'\xff\xd8\xff':
+        return "image/jpeg"
+    if data[:8] == b'\x89PNG\r\n\x1a\n':
+        return "image/png"
+    if data[:6] in (b'GIF87a', b'GIF89a'):
+        return "image/gif"
+    if data[:4] == b'RIFF' and data[8:12] == b'WEBP':
+        return "image/webp"
+    return None
+
 @app.post("/api/transactions/{tx_id}/receipt")
 async def upload_receipt(tx_id: str, file: UploadFile = File(...)):
     if not anthropic_client:
@@ -580,9 +600,11 @@ async def upload_receipt(tx_id: str, file: UploadFile = File(...)):
     contents = await file.read()
     if not contents:
         raise HTTPException(status_code=400, detail="Empty file.")
-    media_type = file.content_type or "image/jpeg"
-    if not media_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="Only image files are supported.")
+    if len(contents) > MAX_RECEIPT_BYTES:
+        raise HTTPException(status_code=413, detail="File too large. Maximum size is 10 MB.")
+    media_type = _detect_image_type(contents)
+    if not media_type:
+        raise HTTPException(status_code=400, detail="Only JPEG, PNG, GIF, or WebP images are supported.")
     b64_image = base64.b64encode(contents).decode("utf-8")
 
     prompt = """Analyze this receipt and break down the items. Categorize each item into one of the following main categories:
@@ -773,41 +795,29 @@ Be direct and use 1-2 emojis."""
 
 @app.get("/api/monthly-trend")
 async def api_monthly_trend():
+    monthly: Dict[str, Any] = {}
     conn = sqlite3.connect("spending.db")
     c = conn.cursor()
     c.execute("""
-        SELECT year, month, SUM(ABS(amount)), category
-        FROM transactions
-        WHERE amount < 0
-        GROUP BY year, month
-        ORDER BY year, month
-    """)
-    # Aggregate by month with category breakdown
-    from collections import defaultdict
-    monthly: Dict[str, Any] = {}
-    conn2 = sqlite3.connect("spending.db")
-    c2 = conn2.cursor()
-    c2.execute("""
         SELECT year, month, SUM(ABS(amount)) as total
         FROM transactions WHERE amount < 0
         GROUP BY year, month ORDER BY year, month
     """)
-    for year, month, total in c2.fetchall():
+    for year, month, total in c.fetchall():
         key = f"{year}-{month:02d}"
         monthly[key] = {"year": year, "month": month, "total": round(total, 2), "label": datetime(year, month, 1).strftime("%b '%y")}
-    c2.execute("""
+    c.execute("""
         SELECT year, month, category, SUM(ABS(amount))
         FROM transactions WHERE amount < 0
         GROUP BY year, month, category
     """)
-    for year, month, cat, amt in c2.fetchall():
+    for year, month, cat, amt in c.fetchall():
         key = f"{year}-{month:02d}"
         if key in monthly:
             if "categories" not in monthly[key]:
                 monthly[key]["categories"] = {}
             monthly[key]["categories"][cat or "Other"] = round(amt, 2)
     conn.close()
-    conn2.close()
     return list(monthly.values())
 
 class BudgetInput(BaseModel):
@@ -819,10 +829,6 @@ class BudgetInput(BaseModel):
 async def set_budget(b: BudgetInput):
     conn = sqlite3.connect("spending.db")
     c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS budgets
-        (year INTEGER, month INTEGER, amount REAL, PRIMARY KEY (year, month))
-    """)
     c.execute("INSERT OR REPLACE INTO budgets (year, month, amount) VALUES (?, ?, ?)",
               (b.year, b.month, b.amount))
     conn.commit()
@@ -851,16 +857,17 @@ def dashboard():
 
     tx_rows = ""
     for t in transactions:
-        date_, counterparty, desc, amount, currency, category = t
+        _, date_, counterparty, desc, amount, currency, category = t
         color = "#ff6b6b" if amount < 0 else "#51cf66"
-        tx_rows += f"""
-        <tr>
-            <td>{date_}</td>
-            <td>{counterparty}</td>
-            <td>{desc}</td>
-            <td style="color:{color}">€{amount:.2f}</td>
-            <td><span class="badge">{category}</span></td>
-        </tr>"""
+        tx_rows += (
+            f"<tr>"
+            f"<td>{html.escape(str(date_))}</td>"
+            f"<td>{html.escape(str(counterparty))}</td>"
+            f"<td>{html.escape(str(desc))}</td>"
+            f"<td style=\"color:{color}\">€{amount:.2f}</td>"
+            f"<td><span class=\"badge\">{html.escape(str(category))}</span></td>"
+            f"</tr>"
+        )
 
     logs_html = "\n".join(reversed(list(log_buffer)))
 
@@ -983,19 +990,23 @@ Rules:
 - Be concrete (mention actual amounts or percentages)
 - Format: numbered list, one tip per line, no extra commentary"""
 
-        message = anthropic_client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=400,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        raw = message.content[0].text.strip()
-        log(f"Advice generated for {label}")
-        tips = [line.strip() for line in raw.split("\n") if line.strip()]
-        advice_html = "\n".join(
-            f'<div class="tip"><span class="tip-num">{i+1}</span>'
-            f'<span class="tip-text">{tip.lstrip("0123456789. ")}</span></div>'
-            for i, tip in enumerate(tips[:3])
-        )
+        try:
+            message = anthropic_client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=400,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            raw = message.content[0].text.strip()
+            log(f"Advice generated for {label}")
+            tips = [line.strip() for line in raw.split("\n") if line.strip()]
+            advice_html = "\n".join(
+                f'<div class="tip"><span class="tip-num">{i+1}</span>'
+                f'<span class="tip-text">{html.escape(tip.lstrip("0123456789. "))}</span></div>'
+                for i, tip in enumerate(tips[:3])
+            )
+        except Exception as e:
+            log(f"Error generating advice: {e}")
+            advice_html = "<p style='color:#888'>Could not generate advice at this time.</p>"
 
     return f"""<!DOCTYPE html>
 <html>

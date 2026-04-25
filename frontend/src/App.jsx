@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import ReceiptUpload from './components/ReceiptUpload';
 import FinancialReport from './components/FinancialReport';
+import { API_BASE } from './config';
 
 const getIconForMerchant = (merchant) => {
   if (merchant.includes('Starbucks')) return { icon: '☕', bg: 'bg-green-900', text: 'text-green-400' };
@@ -46,35 +47,49 @@ export default function App() {
   const fetchHomeData = () => {
     setRefreshing(true);
     Promise.all([
-      fetch('http://127.0.0.1:8000/api/transactions/sync', { method: 'POST' })
+      fetch(`${API_BASE}/api/transactions/sync`, { method: 'POST' })
         .then(r => r.json())
         .then(d => d.transactions || [])
-        .catch(() => fetch('http://127.0.0.1:8000/api/transactions').then(r => r.json())),
-      fetch('http://127.0.0.1:8000/api/balance').then(r => r.json()),
+        .catch(() => fetch(`${API_BASE}/api/transactions`).then(r => r.json())),
+      fetch(`${API_BASE}/api/balance`).then(r => r.json()),
     ]).then(([txData, balData]) => {
       setTransactions(Array.isArray(txData) ? txData : []);
       if (balData.balance !== null) setAccountBalance(balData.balance);
     }).catch(() => {}).finally(() => setRefreshing(false));
   };
 
-  useEffect(() => { fetchHomeData(); }, []);
+  useEffect(() => {
+    fetchHomeData();
+    // Load budget from backend on mount
+    const now = new Date();
+    fetch(`${API_BASE}/api/budget/${now.getFullYear()}/${now.getMonth() + 1}`)
+      .then(r => r.json())
+      .then(d => { if (d.amount != null) { setBudget(d.amount); localStorage.setItem('monthly_budget', d.amount); } })
+      .catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const subsLoadedRef = useRef(false);
+  const forecastLoadedRef = useRef(false);
+  const trendLoadedRef = useRef(false);
 
   useEffect(() => {
-    if (currentTab === 'subs' && subscriptions.length === 0) {
+    if (currentTab === 'subs' && !subsLoadedRef.current) {
+      subsLoadedRef.current = true;
       setSubsLoading(true);
-      fetch('http://127.0.0.1:8000/api/subscriptions')
+      fetch(`${API_BASE}/api/subscriptions`)
         .then(res => res.json())
         .then(data => { setSubscriptions(data); setSubsLoading(false); })
         .catch(() => setSubsLoading(false));
     }
     if (currentTab === 'forecast') {
-      if (!forecast) loadForecast();
-      if (trend.length === 0) {
-        fetch('http://127.0.0.1:8000/api/monthly-trend')
+      if (!forecastLoadedRef.current) { forecastLoadedRef.current = true; loadForecast(); }
+      if (!trendLoadedRef.current) {
+        trendLoadedRef.current = true;
+        fetch(`${API_BASE}/api/monthly-trend`)
           .then(r => r.json()).then(data => setTrend(data)).catch(() => {});
       }
     }
-  }, [currentTab]);
+  }, [currentTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (currentTab === 'ai' && chatBoxRef.current) {
@@ -84,7 +99,7 @@ export default function App() {
 
   const loadForecast = () => {
     setForecastLoading(true);
-    fetch('http://127.0.0.1:8000/api/predict')
+    fetch(`${API_BASE}/api/predict`)
       .then(res => res.json())
       .then(data => { setForecast(data); setForecastLoading(false); })
       .catch(() => setForecastLoading(false));
@@ -98,7 +113,7 @@ export default function App() {
     setChatHistory(newHistory);
     setIsWaiting(true);
     try {
-      const response = await fetch('http://127.0.0.1:8000/api/chat', {
+      const response = await fetch(`${API_BASE}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: text, history: chatHistory })
@@ -124,7 +139,7 @@ export default function App() {
         merchant: t.merchant,
         amount: t.amount,
       }));
-      const res = await fetch('http://127.0.0.1:8000/api/analyze', {
+      const res = await fetch(`${API_BASE}/api/analyze`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ transactions: txData, user_preference: userPreference }),
@@ -453,11 +468,11 @@ export default function App() {
           <svg className="w-5 h-5 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
         </div>
         <div className="bunq-card flex flex-col gap-1 p-2">
-          {transactions.slice(0, txLimit).map((t, i) => {
+          {transactions.slice(0, txLimit).map((t) => {
             const isExpense = t.amount.startsWith('-');
             const { icon, bg, text } = getIconForMerchant(t.merchant);
             return (
-              <div key={i} className="flex items-center justify-between p-3 hover:bg-[#2C2C2E] rounded-lg transition">
+              <div key={t.id} className="flex items-center justify-between p-3 hover:bg-[#2C2C2E] rounded-lg transition">
                 <div className="flex items-center gap-3 min-w-0">
                   <div className={`w-10 h-10 rounded-full ${bg} ${text} flex items-center justify-center text-lg shrink-0`}>{icon}</div>
                   <div className="min-w-0">
@@ -527,8 +542,8 @@ export default function App() {
               </div>
             </div>
 
-            {subscriptions.map((sub, i) => (
-              <div key={i} className="bunq-card p-4 mb-3">
+            {subscriptions.map((sub) => (
+              <div key={sub.counterparty} className="bunq-card p-4 mb-3">
                 <div className="flex justify-between items-start mb-2">
                   <p className="font-bold text-white text-[15px] flex-1 pr-2">{sub.counterparty}</p>
                   <p className="text-white font-bold shrink-0">€ {sub.avg_amount.toFixed(2)}</p>
@@ -643,7 +658,7 @@ export default function App() {
                         if (!isNaN(val) && val > 0) {
                           setBudget(val);
                           localStorage.setItem('monthly_budget', val);
-                          fetch('http://127.0.0.1:8000/api/budget', { method: 'POST', headers: {'Content-Type':'application/json'},
+                          fetch(`${API_BASE}/api/budget`, { method: 'POST', headers: {'Content-Type':'application/json'},
                             body: JSON.stringify({ amount: val, year: now.getFullYear(), month: now.getMonth() + 1 }) }).catch(() => {});
                         }
                         setBudgetEditing(false);
@@ -731,7 +746,7 @@ export default function App() {
           ) : (
             <div key={idx} className="flex items-start gap-2 max-w-[90%] mb-1 mt-2">
               <FinnAvatar />
-              <div className="chat-bubble-ai p-3 text-[15px] shadow-sm break-words leading-relaxed" dangerouslySetInnerHTML={{ __html: msg.content.replace(/\n/g, '<br>') }} />
+              <div className="chat-bubble-ai p-3 text-[15px] shadow-sm break-words" style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
             </div>
           )
         ))}

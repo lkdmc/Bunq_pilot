@@ -4,7 +4,12 @@ from bunq.sdk.context.bunq_context import BunqContext
 from bunq.sdk.context.api_environment_type import ApiEnvironmentType
 from bunq.sdk.model.generated.endpoint import PaymentApiObject as Payment
 
+_bunq_ready = False
+
 def setup_bunq():
+    global _bunq_ready
+    if _bunq_ready:
+        return True
     api_key = os.getenv("BUNQ_API_KEY")
     if not api_key:
         return False
@@ -15,6 +20,7 @@ def setup_bunq():
             api_context = ApiContext.create(ApiEnvironmentType.SANDBOX, api_key, "Bunq Pilot")
             api_context.save("bunq.conf")
         BunqContext.load_api_context(api_context)
+        _bunq_ready = True
         return True
     except Exception as e:
         print(f"Failed to setup bunq API: {e}")
