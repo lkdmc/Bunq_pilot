@@ -236,7 +236,11 @@ async def receive_webhook(request: Request):
             if amount < 0:
                 date_str = parse_date_from_description(description, created_str)
                 log(f"Outgoing payment: {description} | {counterparty} | €{amount} | date: {date_str}")
-                category = categorize_transaction(description, counterparty, amount)
+                try:
+                    category = categorize_transaction(description, counterparty, amount)
+                except Exception as cat_err:
+                    log(f"Categorization failed ({cat_err}), using 'Other'")
+                    category = "Other"
                 log(f"Category: {category}")
                 save_transaction(tx_id, date_str, amount, currency, description, counterparty, category)
                 log("Saved to DB.")
