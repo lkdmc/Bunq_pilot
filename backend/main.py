@@ -110,6 +110,10 @@ def parse_date_from_description(description: str, fallback: str) -> str:
         return f"{year}-{month}-{day}"
     return fallback[:10]
 
+def extract_merchant_from_description(description: str) -> str:
+    """Strip trailing DD-MM-YYYY date appended by seed_real.py to get merchant name."""
+    return re.sub(r'\s+\d{2}-\d{2}-\d{4}\s*$', '', description).strip()
+
 def save_transaction(tx_id, date_str, amount, currency, description, counterparty, category):
     dt = datetime.fromisoformat(date_str[:10])
     conn = sqlite3.connect("spending.db")
@@ -217,6 +221,11 @@ async def receive_webhook(request: Request):
 
             if amount < 0:
                 date_str = parse_date_from_description(description, created_str)
+                # Real bunq payments go to "Sugar Daddy" sink; merchant is in description
+                if counterparty.lower() in ("sugar daddy", ""):
+                    merchant = extract_merchant_from_description(description)
+                    if merchant:
+                        counterparty = merchant
                 category = classify(counterparty, description)
                 save_transaction(tx_id, date_str, amount, currency, description, counterparty, category)
                 log(f"Saved payment: {counterparty} €{amount} [{category}]")
@@ -391,6 +400,26 @@ def detect_subscriptions() -> list:
         })
 
     return sorted(result, key=lambda x: -x["avg_amount"])
+
+@app.post("/api/admin/fix-counterparties")
+async def fix_counterparties():
+    """One-time migration: fix transactions where counterparty='Sugar Daddy'."""
+    conn = sqlite3.connect("spending.db")
+    c = conn.cursor()
+    c.execute("SELECT id, description FROM transactions WHERE counterparty = 'Sugar Daddy'")
+    rows = c.fetchall()
+    updated = 0
+    for tx_id, description in rows:
+        merchant = extract_merchant_from_description(description)
+        if merchant and merchant != "Sugar Daddy":
+            new_category = classify(merchant, description)
+            c.execute("UPDATE transactions SET counterparty=?, category=? WHERE id=?",
+                      (merchant, new_category, tx_id))
+            updated += 1
+    conn.commit()
+    conn.close()
+    log(f"fix-counterparties: updated {updated} records")
+    return {"fixed": updated}
 
 @app.get("/api/subscriptions")
 async def api_subscriptions():
