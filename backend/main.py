@@ -296,47 +296,53 @@ async def chat_with_finn(input_data: MessageInput):
 
 # ── Subscription Detective ────────────────────────────
 def detect_subscriptions() -> list:
+    from collections import defaultdict
+
     conn = sqlite3.connect("spending.db")
     c = conn.cursor()
-    c.execute("""
-        SELECT counterparty, COUNT(*) as cnt, AVG(amount) as avg_amt,
-               MIN(date) as first_date, MAX(date) as last_date
-        FROM transactions
-        WHERE amount < 0
-        GROUP BY counterparty
-        HAVING cnt >= 2
-        ORDER BY avg_amt ASC
-    """)
+    c.execute("SELECT counterparty, date, amount FROM transactions WHERE amount < 0 ORDER BY counterparty, date")
     rows = c.fetchall()
     conn.close()
 
+    by_counterparty = defaultdict(list)
+    for counterparty, date, amount in rows:
+        by_counterparty[counterparty].append((datetime.fromisoformat(date), abs(amount)))
+
     result = []
-    for counterparty, cnt, avg_amt, first_date, last_date in rows:
-        d1 = datetime.fromisoformat(first_date)
-        d2 = datetime.fromisoformat(last_date)
-        span_days = (d2 - d1).days
-        days_between = span_days / (cnt - 1) if cnt > 1 else 30
+    for counterparty, payments in by_counterparty.items():
+        if len(payments) < 2:
+            continue
 
-        if days_between <= 10:
-            frequency = "weekly"
-        elif days_between <= 35:
-            frequency = "monthly"
-        elif days_between <= 100:
-            frequency = "quarterly"
-        else:
-            frequency = "yearly"
+        dates = [p[0] for p in payments]
+        amounts = [p[1] for p in payments]
 
-        annual_cost = abs(avg_amt) * (365 / max(days_between, 1))
+        # Intervals between consecutive payments must all be 28-35 days
+        intervals = [(dates[i+1] - dates[i]).days for i in range(len(dates) - 1)]
+        if not all(28 <= iv <= 35 for iv in intervals):
+            continue
+
+        # Amount variance within 5%
+        avg_amount = sum(amounts) / len(amounts)
+        if avg_amount == 0:
+            continue
+        if max(abs(a - avg_amount) / avg_amount for a in amounts) > 0.05:
+            continue
+
+        # Day of month variance within 7 days
+        days_of_month = [d.day for d in dates]
+        if max(days_of_month) - min(days_of_month) > 7:
+            continue
+
         result.append({
             "counterparty": counterparty,
-            "count": cnt,
-            "avg_amount": round(abs(avg_amt), 2),
-            "frequency": frequency,
-            "days_between": round(days_between),
-            "annual_cost": round(annual_cost, 2),
+            "count": len(payments),
+            "avg_amount": round(avg_amount, 2),
+            "frequency": "monthly",
+            "annual_cost": round(avg_amount * 12, 2),
             "advice": "",
         })
-    return result
+
+    return sorted(result, key=lambda x: -x["avg_amount"])
 
 @app.get("/api/subscriptions")
 async def api_subscriptions():
