@@ -22,6 +22,20 @@ def setup_bunq():
         print(f"Failed to setup bunq API: {e}")
         return False
 
+def get_balance():
+    if not setup_bunq():
+        return None
+    try:
+        from bunq.sdk.model.generated.endpoint import MonetaryAccountBank
+        user_context = BunqContext.user_context()
+        monetary_account_id = user_context.primary_monetary_account.id_
+        account = MonetaryAccountBank.get(monetary_account_id)
+        bal = account.value.balance
+        return {"balance": float(bal.value), "currency": bal.currency}
+    except Exception as e:
+        print(f"Error fetching balance from SDK: {e}")
+        return None
+
 def get_recent_transactions(limit=10):
     if not setup_bunq():
         return []

@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from typing import List, Dict, Any
 import anthropic
 from dotenv import load_dotenv
-from bunq_client import get_recent_transactions
+from bunq_client import get_recent_transactions, get_balance as get_balance_from_sdk
 
 load_dotenv()
 
@@ -62,9 +62,39 @@ def init_db():
             month INTEGER
         )
     """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS account_balance (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            balance REAL,
+            currency TEXT,
+            updated_at TEXT
+        )
+    """)
     conn.commit()
     conn.close()
     log("Database initialized.")
+
+def get_stored_balance() -> dict | None:
+    conn = sqlite3.connect("spending.db")
+    c = conn.cursor()
+    c.execute("SELECT balance, currency, updated_at FROM account_balance WHERE id = 1")
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return {"balance": row[0], "currency": row[1], "updated_at": row[2]}
+    return None
+
+def update_stored_balance(balance: float, currency: str):
+    conn = sqlite3.connect("spending.db")
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO account_balance (id, balance, currency, updated_at)
+        VALUES (1, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET balance=excluded.balance,
+            currency=excluded.currency, updated_at=excluded.updated_at
+    """, (balance, currency, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
 
 init_db()
 
@@ -176,9 +206,16 @@ def get_available_months() -> list[tuple[int, int]]:
 @app.post("/webhook")
 async def receive_webhook(request: Request):
     body = await request.json()
-    log(f"Webhook received: {json.dumps(body)[:150]}")
     try:
         notification = body.get("NotificationUrl", {})
+        event_type = notification.get("event_type", "")
+
+        # Deduplicate: only process PAYMENT_CREATED (ignore PAYMENT_RECEIVED etc.)
+        if event_type and event_type != "PAYMENT_CREATED":
+            log(f"Skipping event: {event_type}")
+            return {"status": "ok"}
+
+        log(f"Webhook received: {json.dumps(body)[:150]}")
         obj = notification.get("object", {})
         if "Payment" in obj:
             payment = obj["Payment"]
@@ -189,6 +226,13 @@ async def receive_webhook(request: Request):
             currency = amount_obj.get("currency", "EUR")
             description = payment.get("description", "")
             counterparty = payment.get("counterparty_alias", {}).get("display_name", "")
+
+            # Store balance after mutation if present
+            bal_obj = payment.get("balance_after_mutation", {})
+            if bal_obj.get("value"):
+                update_stored_balance(float(bal_obj["value"]), bal_obj.get("currency", "EUR"))
+                log(f"Balance updated: €{bal_obj['value']}")
+
             if amount < 0:
                 date_str = parse_date_from_description(description, created_str)
                 log(f"Outgoing payment: {description} | {counterparty} | €{amount} | date: {date_str}")
@@ -203,6 +247,16 @@ async def receive_webhook(request: Request):
     return {"status": "ok"}
 
 # ── React API ─────────────────────────────────────────
+@app.get("/api/balance")
+async def api_balance():
+    stored = get_stored_balance()
+    if stored:
+        return stored
+    sdk_bal = get_balance_from_sdk()
+    if sdk_bal:
+        return sdk_bal
+    return {"balance": None, "currency": "EUR", "updated_at": None}
+
 @app.get("/api/transactions")
 async def api_transactions():
     rows = get_all_transactions(limit=20)
@@ -328,7 +382,11 @@ Payments:
 
 # ── Predictive Balance ────────────────────────────────
 @app.get("/api/predict")
-async def api_predict(balance: float = 2450.0):
+async def api_predict():
+    stored = get_stored_balance()
+    sdk_bal = None if stored else get_balance_from_sdk()
+    balance_info = stored or sdk_bal
+    balance = balance_info["balance"] if balance_info and balance_info["balance"] is not None else 0.0
     now = datetime.now()
     days_in_month = calendar.monthrange(now.year, now.month)[1]
     days_elapsed = now.day
@@ -377,6 +435,7 @@ Be direct and use 1-2 emojis."""
         "predicted_remaining": round(predicted_remaining, 2),
         "predicted_total": round(predicted_total, 2),
         "current_balance": round(balance, 2),
+        "balance_available": balance_info is not None,
         "predicted_end_balance": round(predicted_end_balance, 2),
         "category_breakdown": category_breakdown,
         "finn_summary": finn_summary,

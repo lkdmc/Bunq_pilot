@@ -23,7 +23,6 @@ export default function App() {
   const [subsLoading, setSubsLoading] = useState(false);
   const [forecast, setForecast] = useState(null);
   const [forecastLoading, setForecastLoading] = useState(false);
-  const [balance, setBalance] = useState(2450);
   const chatBoxRef = useRef(null);
 
   useEffect(() => {
@@ -42,7 +41,7 @@ export default function App() {
         .catch(() => setSubsLoading(false));
     }
     if (currentTab === 'forecast' && !forecast) {
-      loadForecast(balance);
+      loadForecast();
     }
   }, [currentTab]);
 
@@ -52,9 +51,9 @@ export default function App() {
     }
   }, [chatHistory, isWaiting, currentTab]);
 
-  const loadForecast = (bal) => {
+  const loadForecast = () => {
     setForecastLoading(true);
-    fetch(`http://127.0.0.1:8000/api/predict?balance=${bal}`)
+    fetch('http://127.0.0.1:8000/api/predict')
       .then(res => res.json())
       .then(data => { setForecast(data); setForecastLoading(false); })
       .catch(() => setForecastLoading(false));
@@ -238,19 +237,14 @@ export default function App() {
         <h1 className="text-3xl font-bold mb-1">Forecast</h1>
         <p className="text-gray-400 text-sm mb-6">End-of-month prediction</p>
 
-        {/* Balance input */}
+        {/* Current balance */}
         <div className="bunq-card p-4 mb-4 flex items-center justify-between">
           <p className="text-gray-400 text-sm">Current balance</p>
-          <div className="flex items-center gap-1">
-            <span className="text-white font-bold">€</span>
-            <input
-              type="number"
-              value={balance}
-              onChange={e => setBalance(parseFloat(e.target.value) || 0)}
-              onBlur={() => loadForecast(balance)}
-              className="bg-transparent text-white text-right font-bold text-lg outline-none w-28"
-            />
-          </div>
+          {forecast ? (
+            forecast.balance_available
+              ? <p className="text-white font-bold text-lg">€ {forecast.current_balance.toFixed(2)}</p>
+              : <p className="text-gray-500 text-sm">Not available yet</p>
+          ) : null}
         </div>
 
         {forecastLoading ? (
