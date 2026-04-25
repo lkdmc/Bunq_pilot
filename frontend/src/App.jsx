@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
+import ReceiptUpload from './components/ReceiptUpload';
+import FinancialReport from './components/FinancialReport';
 
 const getIconForMerchant = (merchant) => {
   if (merchant.includes('Starbucks')) return { icon: '☕', bg: 'bg-green-900', text: 'text-green-400' };
@@ -30,6 +32,7 @@ export default function App() {
   const [budget, setBudget] = useState(() => { const s = localStorage.getItem('monthly_budget'); return s ? parseFloat(s) : null; });
   const [budgetInput, setBudgetInput] = useState('');
   const [budgetEditing, setBudgetEditing] = useState(false);
+  const [receiptTxId, setReceiptTxId] = useState(null);
   const chatBoxRef = useRef(null);
 
   const fetchHomeData = () => {
@@ -187,9 +190,20 @@ export default function App() {
                     <p className="text-xs text-gray-400 truncate">{t.desc || t.date}</p>
                   </div>
                 </div>
-                <p className={`text-[15px] font-bold shrink-0 ml-2 ${isExpense ? 'text-white' : 'text-blue-500'}`}>
-                  {isExpense ? '-' : '+'}€{Math.abs(parseFloat(t.amount)).toFixed(2)}
-                </p>
+                <div className="flex items-center gap-2 shrink-0 ml-2">
+                  <p className={`text-[15px] font-bold ${isExpense ? 'text-white' : 'text-blue-500'}`}>
+                    {isExpense ? '-' : '+'}€{Math.abs(parseFloat(t.amount)).toFixed(2)}
+                  </p>
+                  {isExpense && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setReceiptTxId(t.id); }}
+                      className="text-gray-600 hover:text-blue-400 transition-colors p-1"
+                      title="Scan receipt"
+                    >
+                      📷
+                    </button>
+                  )}
+                </div>
               </div>
             );
           })}
@@ -498,17 +512,30 @@ export default function App() {
     </div>
   );
 
+  const renderReceipt = () => (
+    <FinancialReport onBack={() => setCurrentTab('home')} />
+  );
+
   const tabs = {
     home: renderHome,
     subs: renderSubs,
     forecast: renderForecast,
     ai: renderChat,
+    receipt: renderReceipt,
   };
 
   return (
     <div className="flex items-center justify-center min-h-screen bg-gray-900">
       <div className="app-container">
         {(tabs[currentTab] || renderHome)()}
+
+        {receiptTxId && (
+          <ReceiptUpload
+            txId={receiptTxId}
+            onClose={() => setReceiptTxId(null)}
+            onUploadSuccess={() => setReceiptTxId(null)}
+          />
+        )}
 
         <div className="bottom-nav">
           <div className={`nav-item ${currentTab === 'home' ? 'active' : ''}`} onClick={() => setCurrentTab('home')}>
@@ -526,6 +553,10 @@ export default function App() {
           <div className={`nav-item ${currentTab === 'ai' ? 'active' : ''}`} onClick={() => setCurrentTab('ai')}>
             <svg fill={currentTab === 'ai' ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
             <span>Finn</span>
+          </div>
+          <div className={`nav-item ${currentTab === 'receipt' ? 'active' : ''}`} onClick={() => setCurrentTab('receipt')}>
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 14l6-6m-5.5.5h.01m4.99 5h.01M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16l3.5-2 3.5 2 3.5-2 3.5 2z" /></svg>
+            <span>Receipt</span>
           </div>
         </div>
       </div>
