@@ -19,7 +19,7 @@ load_dotenv(find_dotenv())
 from bunq.sdk.context.api_context import ApiContext
 from bunq.sdk.context.bunq_context import BunqContext
 from bunq.sdk.context.api_environment_type import ApiEnvironmentType
-from bunq.sdk.model.generated.endpoint import PaymentApiObject, RequestInquiryApiObject
+from bunq.sdk.model.generated.endpoint import PaymentApiObject, RequestInquiryApiObject, MonetaryAccountBankApiObject
 from bunq.sdk.model.generated.object_ import AmountObject, PointerObject
 
 def setup():
@@ -33,7 +33,20 @@ def setup():
         ctx = ApiContext.create(ApiEnvironmentType.SANDBOX, api_key, "Bunq Pilot Seed")
         ctx.save("bunq.conf")
     BunqContext.load_api_context(ctx)
-    return BunqContext.user_context().primary_monetary_account.id_
+    account_id = BunqContext.user_context().primary_monetary_account.id_
+
+    # Raise daily limit so 500+ payments don't get blocked
+    try:
+        MonetaryAccountBankApiObject.update(
+            monetary_account_bank_id=account_id,
+            daily_limit=AmountObject("999999.99", "EUR"),
+        )
+        print(f"  Daily limit raised to €999,999.99")
+    except Exception as e:
+        print(f"  Warning: could not raise daily limit: {e}")
+    time.sleep(0.5)
+
+    return account_id
 
 SUGAR_DADDY = PointerObject("EMAIL", "sugardaddy@bunq.com", "Sugar Daddy")
 
