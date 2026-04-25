@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from typing import List, Dict, Any, Tuple, Optional
 import anthropic
 from dotenv import load_dotenv, find_dotenv
-from bunq_client import get_recent_transactions, get_balance as get_balance_from_sdk, setup_bunq, create_request_inquiry
+from bunq_client import get_recent_transactions, get_balance as get_balance_from_sdk
 
 load_dotenv(find_dotenv())
 
@@ -438,25 +438,6 @@ Be direct and use 1-2 emojis."""
         "predicted_end_balance": round(predicted_end_balance, 2),
         "finn_summary": finn_summary,
     }
-
-# ── Request Money ─────────────────────────────────────
-class RequestMoneyInput(BaseModel):
-    amount: str = "400.00"
-    description: str = "Request money"
-
-@app.post("/api/request-money")
-async def request_money(input_data: RequestMoneyInput):
-    try:
-        req_id = create_request_inquiry(
-            amount=str(input_data.amount),
-            description=input_data.description,
-            counterparty_email="sugardaddy@bunq.com",
-        )
-        log(f"Request inquiry sent: €{input_data.amount} — {input_data.description} (id={req_id})")
-        return {"status": "ok", "detail": f"Request sent for €{input_data.amount}"}
-    except Exception as e:
-        log(f"Request inquiry failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 # ── Debug dashboard (server-side HTML) ───────────────
 @app.get("/", response_class=HTMLResponse)

@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from 'react';
-import { createPortal } from 'react-dom';
 
 const getIconForMerchant = (merchant) => {
   if (merchant.includes('Starbucks')) return { icon: '☕', bg: 'bg-green-900', text: 'text-green-400' };
@@ -25,11 +24,6 @@ export default function App() {
   const [forecast, setForecast] = useState(null);
   const [forecastLoading, setForecastLoading] = useState(false);
   const [accountBalance, setAccountBalance] = useState(null);
-  const [showAddMoney, setShowAddMoney] = useState(false);
-  const [addMoneyAmount, setAddMoneyAmount] = useState('');
-  const [addMoneyDesc, setAddMoneyDesc] = useState('');
-  const [addMoneyLoading, setAddMoneyLoading] = useState(false);
-  const [addMoneyResult, setAddMoneyResult] = useState(null);
   const [txLimit, setTxLimit] = useState(5);
   const [refreshing, setRefreshing] = useState(false);
   const chatBoxRef = useRef(null);
@@ -72,31 +66,6 @@ export default function App() {
       .then(res => res.json())
       .then(data => { setForecast(data); setForecastLoading(false); })
       .catch(() => setForecastLoading(false));
-  };
-
-  const handleAddMoney = async () => {
-    const amount = parseFloat(addMoneyAmount);
-    if (!addMoneyAmount || isNaN(amount) || amount <= 0) return;
-    setAddMoneyLoading(true);
-    setAddMoneyResult(null);
-    try {
-      const res = await fetch('http://127.0.0.1:8000/api/request-money', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amount: amount.toFixed(2), description: addMoneyDesc || 'Request money' })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setAddMoneyResult({ ok: true, msg: data.detail });
-        setTimeout(() => { setShowAddMoney(false); setAddMoneyResult(null); setAddMoneyAmount(''); setAddMoneyDesc(''); }, 2000);
-      } else {
-        setAddMoneyResult({ ok: false, msg: data.detail || 'Request failed' });
-      }
-    } catch {
-      setAddMoneyResult({ ok: false, msg: 'Could not reach backend' });
-    } finally {
-      setAddMoneyLoading(false);
-    }
   };
 
   const sendMessage = async (textToUse) => {
@@ -160,7 +129,7 @@ export default function App() {
           <div className="w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center"><svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" /></svg></div>
           <span className="text-xs font-semibold text-blue-400">Request</span>
         </button>
-        <button className="flex-1 btn-add-money rounded-xl py-3 flex flex-col items-center gap-1 bg-[#2D0A4E]" onClick={() => { setShowAddMoney(true); setAddMoneyResult(null); }}>
+        <button className="flex-1 btn-add-money rounded-xl py-3 flex flex-col items-center gap-1 bg-[#2D0A4E]">
           <div className="w-5 h-5 rounded-full bg-purple-500 flex items-center justify-center"><svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg></div>
           <span className="text-xs font-semibold text-purple-400">Add Money</span>
         </button>
@@ -447,57 +416,6 @@ export default function App() {
     ai: renderChat,
   };
 
-  const renderAddMoneyModal = () => (
-    <div className="fixed inset-0 z-[100] flex items-end justify-center" onClick={() => setShowAddMoney(false)}>
-      <div className="absolute inset-0 bg-black/60" />
-      <div className="relative w-full max-w-[430px] bg-[#1C1C1E] rounded-t-2xl p-6 pb-10" onClick={e => e.stopPropagation()}>
-        <div className="w-10 h-1 bg-gray-600 rounded-full mx-auto mb-5" />
-        <h2 className="text-lg font-bold text-white mb-1">Add Money</h2>
-        <p className="text-xs text-gray-400 mb-5">Sends a payment request to sugardaddy@bunq.com</p>
-
-        <label className="text-xs text-gray-400 mb-1 block">Amount (EUR)</label>
-        <div className="flex items-center bg-[#2C2C2E] rounded-xl px-4 py-3 mb-4">
-          <span className="text-gray-400 mr-2 text-lg">€</span>
-          <input
-            type="number"
-            min="0.01"
-            step="0.01"
-            placeholder="0.00"
-            value={addMoneyAmount}
-            onChange={e => setAddMoneyAmount(e.target.value)}
-            className="flex-1 bg-transparent outline-none text-white text-lg placeholder-gray-600"
-            autoFocus
-          />
-        </div>
-
-        <label className="text-xs text-gray-400 mb-1 block">Description</label>
-        <div className="flex items-center bg-[#2C2C2E] rounded-xl px-4 py-3 mb-6">
-          <input
-            type="text"
-            placeholder="Request money"
-            value={addMoneyDesc}
-            onChange={e => setAddMoneyDesc(e.target.value)}
-            className="flex-1 bg-transparent outline-none text-white text-sm placeholder-gray-600"
-          />
-        </div>
-
-        {addMoneyResult && (
-          <p className={`text-sm text-center mb-4 ${addMoneyResult.ok ? 'text-green-400' : 'text-red-400'}`}>
-            {addMoneyResult.ok ? '✓ ' : '✗ '}{addMoneyResult.msg}
-          </p>
-        )}
-
-        <button
-          onClick={handleAddMoney}
-          disabled={addMoneyLoading || !addMoneyAmount}
-          className="w-full py-3.5 rounded-xl bg-purple-600 text-white font-bold text-sm disabled:opacity-50 transition"
-        >
-          {addMoneyLoading ? 'Sending...' : 'Send Request'}
-        </button>
-      </div>
-    </div>
-  );
-
   return (
     <div className="flex items-center justify-center min-h-screen bg-gray-900">
       <div className="app-container">
@@ -523,7 +441,6 @@ export default function App() {
         </div>
       </div>
 
-      {showAddMoney && createPortal(renderAddMoneyModal(), document.body)}
     </div>
   );
 }
