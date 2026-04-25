@@ -5,7 +5,8 @@ import re
 import calendar
 from datetime import datetime
 from collections import deque
-from fastapi import FastAPI, Request, HTTPException
+import base64
+from fastapi import FastAPI, Request, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -72,6 +73,16 @@ def init_db():
             balance REAL,
             currency TEXT,
             updated_at TEXT
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS receipt_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            transaction_id TEXT,
+            name TEXT,
+            category TEXT,
+            subcategory TEXT,
+            amount REAL
         )
     """)
     conn.commit()
@@ -420,6 +431,119 @@ async def fix_counterparties():
     conn.close()
     log(f"fix-counterparties: updated {updated} records")
     return {"fixed": updated}
+
+# ── Receipt Upload & Report ───────────────────────────────────────────────────
+
+@app.post("/api/transactions/{tx_id}/receipt")
+async def upload_receipt(tx_id: str, file: UploadFile = File(...)):
+    if not anthropic_client:
+        raise HTTPException(status_code=500, detail="Anthropic API Key not configured.")
+
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="Empty file.")
+    media_type = file.content_type or "image/jpeg"
+    if not media_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Only image files are supported.")
+    b64_image = base64.b64encode(contents).decode("utf-8")
+
+    prompt = """Analyze this receipt and break down the items. Categorize each item into one of the following main categories:
+- Groceries / Supermarket
+- Shopping / Clothing & Apparel
+- Health & Personal Care
+- Entertainment & Tech
+- Restaurants / Dining Out
+- Other
+
+Then, subcategorize each item into ONE of:
+- Essential
+- Standard
+- Luxury
+
+Format your response as a JSON array of objects, where each object has:
+- "name" (string)
+- "category" (string)
+- "subcategory" (string)
+- "amount" (number)
+
+Do not include any other text, just the raw JSON array."""
+
+    try:
+        response = anthropic_client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1024,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64_image}},
+                    {"type": "text", "text": prompt}
+                ]
+            }]
+        )
+        text_resp = response.content[0].text.strip()
+        if text_resp.startswith("```json"):
+            text_resp = text_resp[7:]
+        if text_resp.endswith("```"):
+            text_resp = text_resp[:-3]
+
+        items = json.loads(text_resp.strip())
+
+        conn = sqlite3.connect("spending.db")
+        c = conn.cursor()
+        for item in items:
+            c.execute(
+                "INSERT INTO receipt_items (transaction_id, name, category, subcategory, amount) VALUES (?, ?, ?, ?, ?)",
+                (tx_id, item.get("name"), item.get("category"), item.get("subcategory"), item.get("amount"))
+            )
+        conn.commit()
+        conn.close()
+
+        return {"status": "ok", "items": items}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/receipts/report")
+async def api_receipts_report():
+    conn = sqlite3.connect("spending.db")
+    c = conn.cursor()
+    c.execute("SELECT name, category, subcategory, amount FROM receipt_items ORDER BY id DESC LIMIT 50")
+    rows = c.fetchall()
+    conn.close()
+
+    breakdown_map: Dict[Tuple, float] = {}
+    for name, category, subcategory, amount in rows:
+        key = (category, subcategory)
+        breakdown_map[key] = breakdown_map.get(key, 0) + (amount or 0)
+
+    breakdown = [
+        {"category": k[0], "subcategory": k[1], "total": round(v, 2)}
+        for k, v in breakdown_map.items()
+    ]
+
+    advice = "No receipt data available yet."
+    if breakdown and anthropic_client:
+        items_text = "\n".join([
+            f"- {name} ({category} / {subcategory}): €{amount:.2f}"
+            for name, category, subcategory, amount in rows if amount
+        ])
+        prompt = f"""You are Finn, a smart financial advisor. Look at this recent itemized receipt spending:
+
+{items_text}
+
+Provide 3 short, punchy tips about their subcategory spending (Essential vs Standard vs Luxury) and suggest areas to cut back. Keep it under 4 sentences total. Use emojis."""
+        try:
+            msg = anthropic_client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=200,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            advice = msg.content[0].text.strip()
+        except Exception as e:
+            log(f"Error getting receipt advice: {e}")
+
+    return {"breakdown": breakdown, "advice": advice}
+
 
 @app.get("/api/subscriptions")
 async def api_subscriptions():
