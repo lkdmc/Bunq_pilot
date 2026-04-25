@@ -46,10 +46,13 @@ export default function App() {
   const fetchHomeData = () => {
     setRefreshing(true);
     Promise.all([
-      fetch('http://127.0.0.1:8000/api/transactions').then(r => r.json()),
+      fetch('http://127.0.0.1:8000/api/transactions/sync', { method: 'POST' })
+        .then(r => r.json())
+        .then(d => d.transactions || [])
+        .catch(() => fetch('http://127.0.0.1:8000/api/transactions').then(r => r.json())),
       fetch('http://127.0.0.1:8000/api/balance').then(r => r.json()),
     ]).then(([txData, balData]) => {
-      setTransactions(txData);
+      setTransactions(Array.isArray(txData) ? txData : []);
       if (balData.balance !== null) setAccountBalance(balData.balance);
     }).catch(() => {}).finally(() => setRefreshing(false));
   };

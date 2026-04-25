@@ -96,6 +96,7 @@ def get_recent_transactions(limit=10):
                         else "Unknown")
             desc = p.description or "No description"
             formatted_tx.append({
+                "id": str(p.id_),
                 "date": date, "amount": amount, "currency": currency,
                 "merchant": merchant, "desc": desc,
             })

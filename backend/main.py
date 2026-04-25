@@ -290,6 +290,51 @@ def classify(counterparty: str, description: str) -> str:
             return category
     return "Other"
 
+# ── Live sync from bunq ───────────────────────────────
+def sync_from_bunq(limit: int = 20) -> int:
+    """Fetch recent payments from bunq SDK and store any new ones in spending.db.
+    Returns number of newly inserted transactions."""
+    live = get_recent_transactions(limit=limit)
+    if not live:
+        return 0
+    new_count = 0
+    conn = sqlite3.connect("spending.db")
+    c = conn.cursor()
+    for t in live:
+        tx_id = t.get("id")
+        if not tx_id:
+            continue
+        c.execute("SELECT 1 FROM transactions WHERE id = ?", (tx_id,))
+        if c.fetchone():
+            continue
+        try:
+            amount = float(t["amount"])
+        except (ValueError, TypeError):
+            amount = 0.0
+        desc = t.get("desc", "")
+        counterparty = t.get("merchant", "Unknown")
+        if counterparty.lower() in ("sugar daddy", ""):
+            counterparty = extract_merchant_from_description(desc) or counterparty
+        category = classify(counterparty, desc)
+        date_str = t.get("date", datetime.now().strftime("%Y-%m-%d"))
+        try:
+            dt = datetime.fromisoformat(date_str[:10])
+        except ValueError:
+            dt = datetime.now()
+        c.execute("""
+            INSERT OR IGNORE INTO transactions
+            (id, date, amount, currency, description, counterparty, category, year, month)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (tx_id, date_str[:10], amount, t.get("currency", "EUR"),
+              desc, counterparty, category, dt.year, dt.month))
+        if c.rowcount:
+            new_count += 1
+    conn.commit()
+    conn.close()
+    if new_count:
+        log(f"sync_from_bunq: inserted {new_count} new transactions")
+    return new_count
+
 # ── React API ─────────────────────────────────────────
 @app.get("/api/balance")
 async def api_balance():
@@ -302,8 +347,25 @@ async def api_balance():
         return stored
     return {"balance": None, "currency": "EUR", "updated_at": None}
 
+@app.post("/api/transactions/sync")
+async def api_sync_transactions():
+    """Pull latest transactions from bunq and store in DB."""
+    try:
+        new_count = sync_from_bunq(limit=50)
+        rows = get_all_transactions(limit=20)
+        txs = [
+            {"id": r[0], "date": r[1], "merchant": r[2], "desc": r[3],
+             "amount": str(r[4]), "currency": r[5], "category": r[6]}
+            for r in rows
+        ]
+        return {"synced": new_count, "transactions": txs}
+    except Exception as e:
+        log(f"sync error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/transactions")
 async def api_transactions():
+    sync_from_bunq(limit=50)
     rows = get_all_transactions(limit=20)
     if rows:
         return [
