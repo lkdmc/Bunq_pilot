@@ -9,12 +9,21 @@ const getIconForMerchant = (merchant) => {
   return { icon: '💳', bg: 'bg-gray-800', text: 'text-gray-300' };
 };
 
+const FinnAvatar = () => (
+  <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#FF8C00] to-[#AF52DE] flex items-center justify-center text-white text-sm font-bold shrink-0 shadow-sm border border-[#2C2C2E]">F</div>
+);
+
 export default function App() {
   const [currentTab, setCurrentTab] = useState('home');
   const [transactions, setTransactions] = useState([]);
   const [chatHistory, setChatHistory] = useState([]);
   const [inputValue, setInputValue] = useState('');
   const [isWaiting, setIsWaiting] = useState(false);
+  const [subscriptions, setSubscriptions] = useState([]);
+  const [subsLoading, setSubsLoading] = useState(false);
+  const [forecast, setForecast] = useState(null);
+  const [forecastLoading, setForecastLoading] = useState(false);
+  const [balance, setBalance] = useState(2450);
   const chatBoxRef = useRef(null);
 
   useEffect(() => {
@@ -25,49 +34,59 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (currentTab === 'subs' && subscriptions.length === 0) {
+      setSubsLoading(true);
+      fetch('http://127.0.0.1:8000/api/subscriptions')
+        .then(res => res.json())
+        .then(data => { setSubscriptions(data); setSubsLoading(false); })
+        .catch(() => setSubsLoading(false));
+    }
+    if (currentTab === 'forecast' && !forecast) {
+      loadForecast(balance);
+    }
+  }, [currentTab]);
+
+  useEffect(() => {
     if (currentTab === 'ai' && chatBoxRef.current) {
       chatBoxRef.current.scrollTop = chatBoxRef.current.scrollHeight;
     }
   }, [chatHistory, isWaiting, currentTab]);
 
+  const loadForecast = (bal) => {
+    setForecastLoading(true);
+    fetch(`http://127.0.0.1:8000/api/predict?balance=${bal}`)
+      .then(res => res.json())
+      .then(data => { setForecast(data); setForecastLoading(false); })
+      .catch(() => setForecastLoading(false));
+  };
+
   const sendMessage = async (textToUse) => {
     const text = textToUse || inputValue.trim();
     if (!text || isWaiting) return;
-
     setInputValue('');
     const newHistory = [...chatHistory, { role: 'user', content: text }];
     setChatHistory(newHistory);
     setIsWaiting(true);
-
     try {
       const response = await fetch('http://127.0.0.1:8000/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: text, history: chatHistory })
       });
-      
-      if (!response.ok) {
-        throw new Error(`Error: ${response.status}`);
-      }
+      if (!response.ok) throw new Error(`Error: ${response.status}`);
       const data = await response.json();
       setChatHistory([...newHistory, { role: 'assistant', content: data.response }]);
     } catch (error) {
-      console.error(error);
       setChatHistory([...newHistory, { role: 'assistant', content: 'Oops, there was a communication error! 😢 Please check if the backend server is running.' }]);
     } finally {
       setIsWaiting(false);
     }
   };
 
-  const handleKeyPress = (e) => {
-    if (e.key === 'Enter') {
-      sendMessage();
-    }
-  };
+  // ── Tabs ──────────────────────────────────────────────
 
   const renderHome = () => (
     <div className="flex-1 overflow-y-auto no-scrollbar pb-[90px] bg-black text-white px-4 pt-12">
-      {/* Top Header */}
       <div className="flex justify-between items-center mb-6">
         <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center overflow-hidden border border-gray-700">
           <span className="text-xl">🐜</span>
@@ -80,7 +99,6 @@ export default function App() {
 
       <h1 className="text-3xl font-bold mb-6">Home</h1>
 
-      {/* Insights Card */}
       <div className="bunq-card p-4 flex items-center gap-4 mb-6">
         <div className="w-10 h-10 rounded-full bg-gray-600 flex items-center justify-center text-white shrink-0">
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
@@ -92,7 +110,6 @@ export default function App() {
         <svg className="w-5 h-5 text-gray-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
       </div>
 
-      {/* Action Buttons */}
       <div className="flex gap-3 mb-8">
         <button className="flex-1 btn-pay rounded-xl py-3 flex flex-col items-center gap-1 bg-black">
           <div className="w-5 h-5 rounded-full bg-orange-500 flex items-center justify-center"><svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" /></svg></div>
@@ -108,7 +125,6 @@ export default function App() {
         </button>
       </div>
 
-      {/* Bank Accounts */}
       <div className="mb-8">
         <div className="flex justify-between items-end mb-3">
           <h2 className="text-lg font-bold">Bank Accounts</h2>
@@ -131,7 +147,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* Recent Transactions */}
       <div className="mb-8">
         <div className="flex justify-between items-center mb-3">
           <h2 className="text-lg font-bold">Recent Transactions</h2>
@@ -140,75 +155,203 @@ export default function App() {
         <div className="bunq-card flex flex-col gap-1 p-2">
           {transactions.slice(0, 5).map((t, i) => {
             const isExpense = t.amount.startsWith('-');
-            const colorClass = isExpense ? 'text-white' : 'text-blue-500';
             const { icon, bg, text } = getIconForMerchant(t.merchant);
             return (
               <div key={i} className="flex items-center justify-between p-3 hover:bg-[#2C2C2E] rounded-lg transition">
                 <div className="flex items-center gap-3">
-                  <div className={`w-10 h-10 rounded-full ${bg} ${text} flex items-center justify-center text-lg shrink-0`}>
-                    {icon}
-                  </div>
+                  <div className={`w-10 h-10 rounded-full ${bg} ${text} flex items-center justify-center text-lg shrink-0`}>{icon}</div>
                   <div>
                     <p className="text-sm font-bold text-white">{t.merchant}</p>
                     <p className="text-xs text-gray-400">{t.desc || t.date}</p>
                   </div>
                 </div>
-                <div className="text-right">
-                  <p className={`text-[16px] font-bold ${colorClass}`}>{isExpense ? '' : '+'}€ {t.amount.replace('-', '')}</p>
-                </div>
+                <p className={`text-[16px] font-bold ${isExpense ? 'text-white' : 'text-blue-500'}`}>
+                  {isExpense ? '' : '+'}€ {t.amount.replace('-', '')}
+                </p>
               </div>
             );
           })}
-          {transactions.length === 0 && (
-             <div className="p-4 text-center text-gray-500 text-sm">No recent transactions</div>
-          )}
-        </div>
-      </div>
-      
-      {/* Extras */}
-      <div className="mb-8">
-        <h2 className="text-lg font-bold mb-3">Extras</h2>
-        <div className="bunq-card p-4 flex items-center gap-4">
-          <div className="w-12 h-12 rounded-full bg-blue-600 flex items-center justify-center text-2xl shrink-0">🎁</div>
-          <div className="flex-1">
-            <p className="font-bold text-white">Win your groceries back!</p>
-            <p className="text-xs text-gray-400 leading-tight mt-1">Get a chance to win every time you pay for groceries with your bunq card for the next 12 months</p>
-          </div>
-          <svg className="w-5 h-5 text-gray-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+          {transactions.length === 0 && <div className="p-4 text-center text-gray-500 text-sm">No recent transactions</div>}
         </div>
       </div>
     </div>
   );
 
+  const renderSubs = () => {
+    const totalAnnual = subscriptions.reduce((s, x) => s + x.annual_cost, 0);
+    return (
+      <div className="flex-1 overflow-y-auto no-scrollbar pb-[90px] bg-black text-white px-4 pt-12">
+        <h1 className="text-3xl font-bold mb-1">Subscriptions</h1>
+        <p className="text-gray-400 text-sm mb-6">Recurring payments detected by AI</p>
+
+        {subsLoading ? (
+          <div className="flex flex-col items-center justify-center mt-24 gap-3">
+            <div className="flex gap-1">
+              <span className="w-2 h-2 bg-gray-400 rounded-full typing-dot"></span>
+              <span className="w-2 h-2 bg-gray-400 rounded-full typing-dot"></span>
+              <span className="w-2 h-2 bg-gray-400 rounded-full typing-dot"></span>
+            </div>
+            <p className="text-gray-500 text-sm">Analyzing your payments...</p>
+          </div>
+        ) : subscriptions.length === 0 ? (
+          <div className="text-center text-gray-500 mt-24">No recurring payments found yet</div>
+        ) : (
+          <>
+            <div className="bunq-card p-4 mb-5 flex justify-between items-center">
+              <div>
+                <p className="text-gray-400 text-xs mb-1">TOTAL ANNUAL COST</p>
+                <p className="text-2xl font-bold">€ {totalAnnual.toFixed(2)}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-gray-400 text-xs mb-1">SUBSCRIPTIONS</p>
+                <p className="text-2xl font-bold">{subscriptions.length}</p>
+              </div>
+            </div>
+
+            {subscriptions.map((sub, i) => (
+              <div key={i} className="bunq-card p-4 mb-3">
+                <div className="flex justify-between items-start mb-2">
+                  <p className="font-bold text-white text-[15px] flex-1 pr-2">{sub.counterparty}</p>
+                  <p className="text-white font-bold shrink-0">€ {sub.avg_amount.toFixed(2)}</p>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-xs text-gray-400 bg-[#1C1C1E] px-2 py-1 rounded-full capitalize">{sub.frequency} · {sub.count}x detected</span>
+                  <span className="text-xs text-gray-400">€ {sub.annual_cost.toFixed(0)}/yr</span>
+                </div>
+                {sub.advice && (
+                  <p className="text-sm text-gray-300 mt-3 border-t border-gray-800 pt-3 leading-relaxed">{sub.advice}</p>
+                )}
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+    );
+  };
+
+  const renderForecast = () => {
+    const maxCat = forecast ? Math.max(...Object.values(forecast.category_breakdown), 1) : 1;
+    const pct = forecast ? Math.round((forecast.days_elapsed / (forecast.days_elapsed + forecast.days_remaining)) * 100) : 0;
+
+    return (
+      <div className="flex-1 overflow-y-auto no-scrollbar pb-[90px] bg-black text-white px-4 pt-12">
+        <h1 className="text-3xl font-bold mb-1">Forecast</h1>
+        <p className="text-gray-400 text-sm mb-6">End-of-month prediction</p>
+
+        {/* Balance input */}
+        <div className="bunq-card p-4 mb-4 flex items-center justify-between">
+          <p className="text-gray-400 text-sm">Current balance</p>
+          <div className="flex items-center gap-1">
+            <span className="text-white font-bold">€</span>
+            <input
+              type="number"
+              value={balance}
+              onChange={e => setBalance(parseFloat(e.target.value) || 0)}
+              onBlur={() => loadForecast(balance)}
+              className="bg-transparent text-white text-right font-bold text-lg outline-none w-28"
+            />
+          </div>
+        </div>
+
+        {forecastLoading ? (
+          <div className="flex flex-col items-center justify-center mt-24 gap-3">
+            <div className="flex gap-1">
+              <span className="w-2 h-2 bg-gray-400 rounded-full typing-dot"></span>
+              <span className="w-2 h-2 bg-gray-400 rounded-full typing-dot"></span>
+              <span className="w-2 h-2 bg-gray-400 rounded-full typing-dot"></span>
+            </div>
+            <p className="text-gray-500 text-sm">Calculating forecast...</p>
+          </div>
+        ) : forecast ? (
+          <>
+            {/* Finn summary */}
+            {forecast.finn_summary && (
+              <div className="bunq-card p-4 mb-4 flex gap-3 items-start">
+                <FinnAvatar />
+                <p className="text-gray-300 text-sm leading-relaxed">{forecast.finn_summary}</p>
+              </div>
+            )}
+
+            {/* Month progress bar */}
+            <div className="bunq-card p-4 mb-4">
+              <div className="flex justify-between text-xs text-gray-400 mb-2">
+                <span>Day {forecast.days_elapsed}</span>
+                <span>{forecast.days_remaining} days left</span>
+              </div>
+              <div className="w-full bg-gray-800 rounded-full h-2">
+                <div className="bg-blue-500 h-2 rounded-full transition-all" style={{ width: `${pct}%` }} />
+              </div>
+            </div>
+
+            {/* Key metrics */}
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              <div className="bunq-card p-4">
+                <p className="text-gray-400 text-xs mb-1">SPENT SO FAR</p>
+                <p className="text-xl font-bold text-red-400">-€ {forecast.current_spend.toFixed(2)}</p>
+              </div>
+              <div className="bunq-card p-4">
+                <p className="text-gray-400 text-xs mb-1">DAILY RATE</p>
+                <p className="text-xl font-bold text-orange-400">€ {forecast.daily_rate.toFixed(2)}</p>
+              </div>
+              <div className="bunq-card p-4">
+                <p className="text-gray-400 text-xs mb-1">PREDICTED TOTAL</p>
+                <p className="text-xl font-bold text-yellow-400">€ {forecast.predicted_total.toFixed(2)}</p>
+              </div>
+              <div className="bunq-card p-4">
+                <p className="text-gray-400 text-xs mb-1">END BALANCE</p>
+                <p className={`text-xl font-bold ${forecast.predicted_end_balance >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  € {forecast.predicted_end_balance.toFixed(2)}
+                </p>
+              </div>
+            </div>
+
+            {/* Category breakdown */}
+            {Object.keys(forecast.category_breakdown).length > 0 && (
+              <div className="bunq-card p-4">
+                <p className="text-gray-400 text-xs mb-4">SPENDING BY CATEGORY</p>
+                {Object.entries(forecast.category_breakdown)
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([cat, amt]) => (
+                    <div key={cat} className="flex items-center gap-3 mb-3">
+                      <span className="text-xs text-gray-400 w-24 shrink-0">{cat}</span>
+                      <div className="flex-1 bg-gray-800 rounded-full h-1.5">
+                        <div className="bg-blue-500 h-1.5 rounded-full" style={{ width: `${(amt / maxCat) * 100}%` }} />
+                      </div>
+                      <span className="text-xs text-white w-14 text-right shrink-0">€ {amt.toFixed(0)}</span>
+                    </div>
+                  ))}
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="text-center text-gray-500 mt-24">No transaction data yet</div>
+        )}
+      </div>
+    );
+  };
+
   const renderChat = () => (
     <div className="flex-1 flex flex-col h-full w-full bg-black">
-      {/* Top Header */}
       <div className="flex items-center justify-center p-4 border-b border-[#1C1C1E] bg-black z-20 shrink-0 relative pt-12">
         <h1 className="text-lg font-bold text-white">Finn AI</h1>
       </div>
 
       <div ref={chatBoxRef} className="chat-area">
         <div className="flex items-start gap-2 max-w-[90%]">
-          <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#FF8C00] to-[#AF52DE] flex items-center justify-center text-white text-sm font-bold shrink-0 shadow-sm border border-[#2C2C2E]">
-            F
-          </div>
+          <FinnAvatar />
           <div className="chat-bubble-ai p-3.5 text-[15px] shadow-sm leading-relaxed">
             Hi! 👋 I'm your financial assistant, <b>Finn</b>. I'll help you manage your money smartly by analyzing your spending. Feel free to ask me anything!
           </div>
         </div>
-        
+
         {chatHistory.map((msg, idx) => (
           msg.role === 'user' ? (
             <div key={idx} className="flex justify-end mb-1 mt-2">
-              <div className="chat-bubble-user p-3 text-[15px] max-w-[85%] break-words">
-                {msg.content}
-              </div>
+              <div className="chat-bubble-user p-3 text-[15px] max-w-[85%] break-words">{msg.content}</div>
             </div>
           ) : (
             <div key={idx} className="flex items-start gap-2 max-w-[90%] mb-1 mt-2">
-              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#FF8C00] to-[#AF52DE] flex items-center justify-center text-white text-sm font-bold shrink-0 shadow-sm mt-1 border border-[#2C2C2E]">
-                F
-              </div>
+              <FinnAvatar />
               <div className="chat-bubble-ai p-3 text-[15px] shadow-sm break-words leading-relaxed" dangerouslySetInnerHTML={{ __html: msg.content.replace(/\n/g, '<br>') }} />
             </div>
           )
@@ -216,9 +359,7 @@ export default function App() {
 
         {isWaiting && (
           <div className="flex items-start gap-2 max-w-[85%] mb-1 mt-2">
-            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#FF8C00] to-[#AF52DE] flex items-center justify-center text-white text-sm font-bold shrink-0 shadow-sm mt-1 border border-[#2C2C2E]">
-              F
-            </div>
+            <FinnAvatar />
             <div className="chat-bubble-ai p-3 px-4 text-sm shadow-sm flex items-center gap-1.5 min-h-[44px]">
               <div className="flex gap-1">
                 <span className="w-1.5 h-1.5 bg-gray-400 rounded-full typing-dot"></span>
@@ -234,27 +375,29 @@ export default function App() {
       <div className="shrink-0 bg-black border-t border-[#1C1C1E] p-3 flex flex-col gap-2 z-10 pb-[90px]">
         <div className="flex overflow-x-auto gap-2 pb-1 no-scrollbar items-center px-1">
           <button className="quick-btn shrink-0" onClick={() => sendMessage('Where did I spend the most this month?')}>
-            💸 Where did I spend the most this month?
+            💸 Where did I spend the most?
           </button>
-          <button className="quick-btn shrink-0" onClick={() => sendMessage('Give me a plan to save on coffee')}>
-            ☕ Give me a plan to save on coffee
+          <button className="quick-btn shrink-0" onClick={() => sendMessage('Which subscriptions should I cancel?')}>
+            🔁 Which subs should I cancel?
+          </button>
+          <button className="quick-btn shrink-0" onClick={() => sendMessage('Give me 3 tips to save money this month')}>
+            💡 Tips to save money
           </button>
         </div>
-        
         <div className="flex items-center gap-2 bg-[#1C1C1E] rounded-full p-1.5 shadow-inner mt-1 border border-[#2C2C2E]">
-          <input 
-            type="text" 
-            className="flex-grow bg-transparent border-none outline-none px-4 py-2 text-[15px] text-white placeholder-gray-500" 
-            placeholder="Ask Finn..." 
+          <input
+            type="text"
+            className="flex-grow bg-transparent border-none outline-none px-4 py-2 text-[15px] text-white placeholder-gray-500"
+            placeholder="Ask Finn..."
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
-            onKeyDown={handleKeyPress}
+            onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
             disabled={isWaiting}
           />
-          <button 
-            onClick={() => sendMessage()} 
+          <button
+            onClick={() => sendMessage()}
             disabled={isWaiting}
-            className={`w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center hover:bg-blue-500 transition shadow-md shrink-0 focus:outline-none focus:ring-2 focus:ring-blue-400 ${isWaiting ? 'opacity-50' : 'opacity-100'}`}
+            className={`w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center hover:bg-blue-500 transition shadow-md shrink-0 ${isWaiting ? 'opacity-50' : 'opacity-100'}`}
           >
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 ml-0.5">
               <path d="M3.478 2.404a.75.75 0 0 0-.926.941l2.432 7.905H13.5a.75.75 0 0 1 0 1.5H4.984l-2.432 7.905a.75.75 0 0 0 .926.94 60.519 60.519 0 0 0 18.445-8.986.75.75 0 0 0 0-1.218A60.517 60.517 0 0 0 3.478 2.404Z" />
@@ -265,32 +408,34 @@ export default function App() {
     </div>
   );
 
+  const tabs = {
+    home: renderHome,
+    subs: renderSubs,
+    forecast: renderForecast,
+    ai: renderChat,
+  };
+
   return (
     <div className="flex items-center justify-center min-h-screen bg-gray-900">
       <div className="app-container">
-        {currentTab === 'home' ? renderHome() : renderChat()}
+        {(tabs[currentTab] || renderHome)()}
 
-        {/* Bottom Navigation */}
         <div className="bottom-nav">
           <div className={`nav-item ${currentTab === 'home' ? 'active' : ''}`} onClick={() => setCurrentTab('home')}>
-            <svg fill={currentTab === 'home' ? "currentColor" : "none"} stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg>
+            <svg fill={currentTab === 'home' ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg>
             <span>Home</span>
           </div>
-          <div className="nav-item">
-            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" /></svg>
-            <span>Cards</span>
+          <div className={`nav-item ${currentTab === 'subs' ? 'active' : ''}`} onClick={() => setCurrentTab('subs')}>
+            <svg fill={currentTab === 'subs' ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+            <span>Subs</span>
           </div>
-          <div className="nav-item">
-            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-            <span>Savings</span>
-          </div>
-          <div className="nav-item">
-            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>
-            <span>Stocks</span>
+          <div className={`nav-item ${currentTab === 'forecast' ? 'active' : ''}`} onClick={() => setCurrentTab('forecast')}>
+            <svg fill={currentTab === 'forecast' ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>
+            <span>Forecast</span>
           </div>
           <div className={`nav-item ${currentTab === 'ai' ? 'active' : ''}`} onClick={() => setCurrentTab('ai')}>
-            <svg fill={currentTab === 'ai' ? "currentColor" : "none"} stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
-            <span>AI</span>
+            <svg fill={currentTab === 'ai' ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
+            <span>Finn</span>
           </div>
         </div>
       </div>

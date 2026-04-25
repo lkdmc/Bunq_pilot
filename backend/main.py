@@ -2,6 +2,7 @@ import sqlite3
 import json
 import os
 import re
+import calendar
 from datetime import datetime
 from collections import deque
 from fastapi import FastAPI, Request, HTTPException
@@ -253,6 +254,133 @@ async def chat_with_finn(input_data: MessageInput):
         return {"response": response.content[0].text}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# ── Subscription Detective ────────────────────────────
+def detect_subscriptions() -> list:
+    conn = sqlite3.connect("spending.db")
+    c = conn.cursor()
+    c.execute("""
+        SELECT counterparty, COUNT(*) as cnt, AVG(amount) as avg_amt,
+               MIN(date) as first_date, MAX(date) as last_date
+        FROM transactions
+        WHERE amount < 0
+        GROUP BY counterparty
+        HAVING cnt >= 2
+        ORDER BY avg_amt ASC
+    """)
+    rows = c.fetchall()
+    conn.close()
+
+    result = []
+    for counterparty, cnt, avg_amt, first_date, last_date in rows:
+        d1 = datetime.fromisoformat(first_date)
+        d2 = datetime.fromisoformat(last_date)
+        span_days = (d2 - d1).days
+        days_between = span_days / (cnt - 1) if cnt > 1 else 30
+
+        if days_between <= 10:
+            frequency = "weekly"
+        elif days_between <= 35:
+            frequency = "monthly"
+        elif days_between <= 100:
+            frequency = "quarterly"
+        else:
+            frequency = "yearly"
+
+        annual_cost = abs(avg_amt) * (365 / max(days_between, 1))
+        result.append({
+            "counterparty": counterparty,
+            "count": cnt,
+            "avg_amount": round(abs(avg_amt), 2),
+            "frequency": frequency,
+            "days_between": round(days_between),
+            "annual_cost": round(annual_cost, 2),
+            "advice": "",
+        })
+    return result
+
+@app.get("/api/subscriptions")
+async def api_subscriptions():
+    subs = detect_subscriptions()
+    if not subs or not anthropic_client:
+        return subs
+
+    subs_text = "\n".join(
+        f"{i+1}. {s['counterparty']}: €{s['avg_amount']:.2f} {s['frequency']}"
+        for i, s in enumerate(subs)
+    )
+    prompt = f"""Analyze these recurring bank payments. Reply with exactly {len(subs)} lines, one per payment in the same order.
+Each line: one emoji + brief description of what the service likely is (max 8 words).
+
+Payments:
+{subs_text}"""
+
+    message = anthropic_client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=300,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    advice_lines = [l.strip() for l in message.content[0].text.strip().split("\n") if l.strip()]
+    for i, sub in enumerate(subs):
+        sub["advice"] = advice_lines[i] if i < len(advice_lines) else ""
+
+    return subs
+
+# ── Predictive Balance ────────────────────────────────
+@app.get("/api/predict")
+async def api_predict(balance: float = 2450.0):
+    now = datetime.now()
+    days_in_month = calendar.monthrange(now.year, now.month)[1]
+    days_elapsed = now.day
+    days_remaining = days_in_month - days_elapsed
+
+    conn = sqlite3.connect("spending.db")
+    c = conn.cursor()
+    c.execute(
+        "SELECT SUM(amount) FROM transactions WHERE year=? AND month=? AND amount < 0",
+        (now.year, now.month)
+    )
+    current_spend = abs(c.fetchone()[0] or 0)
+    c.execute(
+        "SELECT category, SUM(amount) FROM transactions WHERE year=? AND month=? AND amount < 0 GROUP BY category",
+        (now.year, now.month)
+    )
+    category_breakdown = {row[0]: round(abs(row[1]), 2) for row in c.fetchall()}
+    conn.close()
+
+    daily_rate = current_spend / days_elapsed if days_elapsed > 0 else 0
+    predicted_remaining = daily_rate * days_remaining
+    predicted_total = current_spend + predicted_remaining
+    predicted_end_balance = balance - predicted_remaining
+
+    finn_summary = ""
+    if anthropic_client and current_spend > 0:
+        prompt = f"""You are Finn, a friendly financial assistant. Give a 2-sentence spending forecast.
+
+This month so far: €{current_spend:.2f} in {days_elapsed} days (€{daily_rate:.2f}/day)
+Projected month total: €{predicted_total:.2f}
+Current balance: €{balance:.2f} → Predicted end balance: €{predicted_end_balance:.2f}
+
+Be direct and use 1-2 emojis."""
+        message = anthropic_client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=100,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        finn_summary = message.content[0].text.strip()
+
+    return {
+        "days_elapsed": days_elapsed,
+        "days_remaining": days_remaining,
+        "current_spend": round(current_spend, 2),
+        "daily_rate": round(daily_rate, 2),
+        "predicted_remaining": round(predicted_remaining, 2),
+        "predicted_total": round(predicted_total, 2),
+        "current_balance": round(balance, 2),
+        "predicted_end_balance": round(predicted_end_balance, 2),
+        "category_breakdown": category_breakdown,
+        "finn_summary": finn_summary,
+    }
 
 # ── Debug dashboard (server-side HTML) ───────────────
 @app.get("/", response_class=HTMLResponse)
