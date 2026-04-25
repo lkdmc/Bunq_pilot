@@ -316,9 +316,15 @@ def detect_subscriptions() -> list:
         dates = [p[0] for p in payments]
         amounts = [p[1] for p in payments]
 
-        # Intervals between consecutive payments must all be 28-35 days
+        # Classify interval: monthly (28-35d) or quarterly (80-100d)
         intervals = [(dates[i+1] - dates[i]).days for i in range(len(dates) - 1)]
-        if not all(28 <= iv <= 35 for iv in intervals):
+        if all(28 <= iv <= 35 for iv in intervals):
+            frequency = "monthly"
+            annual_multiplier = 12
+        elif all(80 <= iv <= 100 for iv in intervals):
+            frequency = "quarterly"
+            annual_multiplier = 4
+        else:
             continue
 
         # Amount variance within 5%
@@ -337,8 +343,8 @@ def detect_subscriptions() -> list:
             "counterparty": counterparty,
             "count": len(payments),
             "avg_amount": round(avg_amount, 2),
-            "frequency": "monthly",
-            "annual_cost": round(avg_amount * 12, 2),
+            "frequency": frequency,
+            "annual_cost": round(avg_amount * annual_multiplier, 2),
             "advice": "",
         })
 
