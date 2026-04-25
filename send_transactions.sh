@@ -1,8 +1,18 @@
 #!/bin/bash
 
-SESSION_TOKEN="REDACTED_SESSION_TOKEN"
-USER_ID="REDACTED_USER_ID"
-MONETARY_ACCOUNT_ID="REDACTED_ACCOUNT_ID"
+ENV_FILE="$(dirname "$0")/.env"
+if [ -f "$ENV_FILE" ]; then
+  set -a
+  source "$ENV_FILE"
+  set +a
+else
+  echo "Error: .env file not found at $ENV_FILE" >&2
+  exit 1
+fi
+
+SESSION_TOKEN="${BUNQ_SESSION_TOKEN:?BUNQ_SESSION_TOKEN not set in .env}"
+USER_ID="${BUNQ_USER_ID:?BUNQ_USER_ID not set in .env}"
+MONETARY_ACCOUNT_ID="${BUNQ_MONETARY_ACCOUNT_ID:?BUNQ_MONETARY_ACCOUNT_ID not set in .env}"
 BASE_URL="https://public-api.sandbox.bunq.com/v1"
 
 send_payment() {
