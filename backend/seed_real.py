@@ -178,13 +178,11 @@ if __name__ == "__main__":
     random.seed(42)  # reset seed for actual run
 
     print(f"\nTotal spend to seed: €{total_spend:.2f}")
-    print("Requesting top-up from Sugar Daddy...")
-    # Request in chunks of 9999 (bunq sandbox limit per request)
-    remaining = total_spend + 500  # buffer
-    while remaining > 0:
-        chunk = min(remaining, 9999.0)
-        request_topup(account_id, round(chunk, 2))
-        remaining -= chunk
+    print("Requesting €1,000,000 top-up from Sugar Daddy (10 × €99,999)...")
+    for _ in range(10):
+        request_topup(account_id, 99999.99)
+    print("Waiting 5s for Sugar Daddy to process...")
+    time.sleep(5)
 
     print(f"\nStarting payments — Jan 2024 → Apr 2026")
     print("(~6 min estimated, press Ctrl+C to stop)\n")

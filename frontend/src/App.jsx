@@ -26,6 +26,10 @@ export default function App() {
   const [accountBalance, setAccountBalance] = useState(null);
   const [txLimit, setTxLimit] = useState(5);
   const [refreshing, setRefreshing] = useState(false);
+  const [trend, setTrend] = useState([]);
+  const [budget, setBudget] = useState(() => { const s = localStorage.getItem('monthly_budget'); return s ? parseFloat(s) : null; });
+  const [budgetInput, setBudgetInput] = useState('');
+  const [budgetEditing, setBudgetEditing] = useState(false);
   const chatBoxRef = useRef(null);
 
   const fetchHomeData = () => {
@@ -49,8 +53,12 @@ export default function App() {
         .then(data => { setSubscriptions(data); setSubsLoading(false); })
         .catch(() => setSubsLoading(false));
     }
-    if (currentTab === 'forecast' && !forecast) {
-      loadForecast();
+    if (currentTab === 'forecast') {
+      if (!forecast) loadForecast();
+      if (trend.length === 0) {
+        fetch('http://127.0.0.1:8000/api/monthly-trend')
+          .then(r => r.json()).then(data => setTrend(data)).catch(() => {});
+      }
     }
   }, [currentTab]);
 
@@ -322,7 +330,88 @@ export default function App() {
               </div>
             </div>
 
+            {/* Budget */}
+            {(() => {
+              const now = new Date();
+              const budgetPct = budget && forecast ? Math.min((forecast.current_spend / budget) * 100, 100) : 0;
+              const overBudget = budget && forecast && forecast.predicted_total > budget;
+              return (
+                <div className="bunq-card p-4 mb-4">
+                  <div className="flex justify-between items-center mb-2">
+                    <p className="text-gray-400 text-xs">MONTHLY BUDGET</p>
+                    <button onClick={() => { setBudgetEditing(true); setBudgetInput(budget || ''); }} className="text-xs text-blue-400">
+                      {budget ? 'Edit' : 'Set budget'}
+                    </button>
+                  </div>
+                  {budgetEditing ? (
+                    <div className="flex gap-2 items-center">
+                      <span className="text-gray-400">€</span>
+                      <input type="number" value={budgetInput} onChange={e => setBudgetInput(e.target.value)}
+                        className="flex-1 bg-[#2C2C2E] rounded-lg px-3 py-2 text-white text-sm outline-none"
+                        placeholder="e.g. 2000" autoFocus />
+                      <button onClick={() => {
+                        const val = parseFloat(budgetInput);
+                        if (!isNaN(val) && val > 0) {
+                          setBudget(val);
+                          localStorage.setItem('monthly_budget', val);
+                          fetch('http://127.0.0.1:8000/api/budget', { method: 'POST', headers: {'Content-Type':'application/json'},
+                            body: JSON.stringify({ amount: val, year: now.getFullYear(), month: now.getMonth() + 1 }) }).catch(() => {});
+                        }
+                        setBudgetEditing(false);
+                      }} className="bg-blue-600 text-white text-xs px-3 py-2 rounded-lg">Save</button>
+                    </div>
+                  ) : budget && forecast ? (
+                    <>
+                      <div className="flex justify-between text-sm mb-2">
+                        <span className={overBudget ? 'text-red-400 font-bold' : 'text-white'}>
+                          €{forecast.current_spend.toFixed(0)} / €{budget.toFixed(0)}
+                        </span>
+                        <span className={overBudget ? 'text-red-400' : 'text-gray-400'}>
+                          {overBudget ? `⚠ €${(forecast.predicted_total - budget).toFixed(0)} over` : `€${(budget - forecast.predicted_total).toFixed(0)} remaining`}
+                        </span>
+                      </div>
+                      <div className="w-full bg-gray-800 rounded-full h-2">
+                        <div className={`h-2 rounded-full transition-all ${overBudget ? 'bg-red-500' : budgetPct > 80 ? 'bg-orange-400' : 'bg-green-500'}`}
+                          style={{ width: `${budgetPct}%` }} />
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-gray-600 text-sm">No budget set</p>
+                  )}
+                </div>
+              );
+            })()}
 
+            {/* Monthly trend chart */}
+            {trend.length > 0 && (() => {
+              const recent = trend.slice(-12);
+              const max = Math.max(...recent.map(m => m.total));
+              return (
+                <div className="bunq-card p-4 mb-4">
+                  <p className="text-gray-400 text-xs mb-4">MONTHLY SPENDING</p>
+                  <div className="flex items-end gap-1 h-28">
+                    {recent.map((m, i) => {
+                      const h = Math.round((m.total / max) * 100);
+                      const isCurrentMonth = m.year === new Date().getFullYear() && m.month === new Date().getMonth() + 1;
+                      return (
+                        <div key={i} className="flex-1 flex flex-col items-center gap-1">
+                          <div className="w-full flex items-end justify-center" style={{ height: '96px' }}>
+                            <div
+                              className={`w-full rounded-t-sm transition-all ${isCurrentMonth ? 'bg-blue-500' : budget && m.total > budget ? 'bg-red-500/70' : 'bg-gray-600'}`}
+                              style={{ height: `${h}%` }}
+                            />
+                          </div>
+                          <p className="text-[9px] text-gray-500 truncate w-full text-center">{m.label}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="flex justify-between text-[10px] text-gray-600 mt-1">
+                    <span>€0</span><span>€{max.toFixed(0)}</span>
+                  </div>
+                </div>
+              );
+            })()}
           </>
         ) : (
           <div className="text-center text-gray-500 mt-24">No transaction data yet</div>

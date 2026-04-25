@@ -217,8 +217,9 @@ async def receive_webhook(request: Request):
 
             if amount < 0:
                 date_str = parse_date_from_description(description, created_str)
-                save_transaction(tx_id, date_str, amount, currency, description, counterparty, "")
-                log(f"Saved payment: {counterparty} €{amount}")
+                category = classify(counterparty, description)
+                save_transaction(tx_id, date_str, amount, currency, description, counterparty, category)
+                log(f"Saved payment: {counterparty} €{amount} [{category}]")
             else:
                 log(f"Incoming payment skipped: €{amount} from {counterparty}")
 
@@ -238,12 +239,36 @@ async def receive_webhook(request: Request):
             counterparty = (rr.get("counterparty_alias") or {}).get("display_name", "")
 
             date_str = parse_date_from_description(description, created_str)
-            save_transaction(tx_id, date_str, amount, currency, description, counterparty, "")
-            log(f"Saved request response: {counterparty} €{amount}")
+            category = classify(counterparty, description)
+            save_transaction(tx_id, date_str, amount, currency, description, counterparty, category)
+            log(f"Saved request response: {counterparty} €{amount} [{category}]")
 
     except Exception as e:
         log(f"ERROR: {e}")
     return {"status": "ok"}
+
+# ── Category classifier ───────────────────────────────
+CATEGORY_RULES = [
+    ("Housing",      ["vesteda", "huur", "woning", "hypotheek"]),
+    ("Insurance",    ["zilveren kruis", "menzis", "centraal beheer", "verzekering", "zorgpremie"]),
+    ("Utilities",    ["vattenfall", "eneco", "nuon", "vitens", "evides", "waterschap", "energie", "water"]),
+    ("Groceries",    ["albert heijn", "jumbo", "lidl", "aldi", "plus", "dekamarkt", "dirk", "spar", "hoogvliet"]),
+    ("Dining",       ["restaurant", "cafe", "pathe", "mcdonalds", "starbucks", "thuisbezorgd", "uber eats", "dominos", "subway", "sushi", "vapiano", "broodje"]),
+    ("Transport",    ["ns reizen", "ov-chipkaart", "uber", "bolt", "shell", "bp", "tankstation", "q-park", "parking", "rdw"]),
+    ("Streaming",    ["netflix", "spotify", "disney", "videoland", "apple tv", "hbo"]),
+    ("Subscriptions",["kpn", "ziggo", "odido", "amazon prime", "apple icloud", "adobe", "linkedin", "basic fit", "gym"]),
+    ("Government",   ["belastingdienst", "gemeente", "duo", "cak", "rdw motorrijtuig"]),
+    ("Shopping",     ["zalando", "coolblue", "bol.com", "h&m", "zara", "ikea", "primark", "hema", "mediamarkt", "kruidvat", "action", "decathlon", "rituals"]),
+    ("Health",       ["apotheek", "huisarts", "tandarts", "fysio", "kruidvat"]),
+    ("Friends",      ["thomas", "emma", "liam", "sophie", "noah", "olivia", "lucas", "mia", "betaalverzoek"]),
+]
+
+def classify(counterparty: str, description: str) -> str:
+    text = (counterparty + " " + description).lower()
+    for category, keywords in CATEGORY_RULES:
+        if any(kw in text for kw in keywords):
+            return category
+    return "Other"
 
 # ── React API ─────────────────────────────────────────
 @app.get("/api/balance")
@@ -454,6 +479,76 @@ Be direct and use 1-2 emojis."""
         "predicted_end_balance": round(predicted_end_balance, 2),
         "finn_summary": finn_summary,
     }
+
+@app.get("/api/monthly-trend")
+async def api_monthly_trend():
+    conn = sqlite3.connect("spending.db")
+    c = conn.cursor()
+    c.execute("""
+        SELECT year, month, SUM(ABS(amount)), category
+        FROM transactions
+        WHERE amount < 0
+        GROUP BY year, month
+        ORDER BY year, month
+    """)
+    # Aggregate by month with category breakdown
+    from collections import defaultdict
+    monthly: Dict[str, Any] = {}
+    conn2 = sqlite3.connect("spending.db")
+    c2 = conn2.cursor()
+    c2.execute("""
+        SELECT year, month, SUM(ABS(amount)) as total
+        FROM transactions WHERE amount < 0
+        GROUP BY year, month ORDER BY year, month
+    """)
+    for year, month, total in c2.fetchall():
+        key = f"{year}-{month:02d}"
+        monthly[key] = {"year": year, "month": month, "total": round(total, 2), "label": datetime(year, month, 1).strftime("%b '%y")}
+    c2.execute("""
+        SELECT year, month, category, SUM(ABS(amount))
+        FROM transactions WHERE amount < 0
+        GROUP BY year, month, category
+    """)
+    for year, month, cat, amt in c2.fetchall():
+        key = f"{year}-{month:02d}"
+        if key in monthly:
+            if "categories" not in monthly[key]:
+                monthly[key]["categories"] = {}
+            monthly[key]["categories"][cat or "Other"] = round(amt, 2)
+    conn.close()
+    conn2.close()
+    return list(monthly.values())
+
+class BudgetInput(BaseModel):
+    amount: float
+    year: int
+    month: int
+
+@app.post("/api/budget")
+async def set_budget(b: BudgetInput):
+    conn = sqlite3.connect("spending.db")
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS budgets
+        (year INTEGER, month INTEGER, amount REAL, PRIMARY KEY (year, month))
+    """)
+    c.execute("INSERT OR REPLACE INTO budgets (year, month, amount) VALUES (?, ?, ?)",
+              (b.year, b.month, b.amount))
+    conn.commit()
+    conn.close()
+    return {"status": "ok"}
+
+@app.get("/api/budget/{year}/{month}")
+async def get_budget(year: int, month: int):
+    conn = sqlite3.connect("spending.db")
+    c = conn.cursor()
+    try:
+        c.execute("SELECT amount FROM budgets WHERE year=? AND month=?", (year, month))
+        row = c.fetchone()
+    except Exception:
+        row = None
+    conn.close()
+    return {"amount": row[0] if row else None}
 
 # ── Debug dashboard (server-side HTML) ───────────────
 @app.get("/", response_class=HTMLResponse)
