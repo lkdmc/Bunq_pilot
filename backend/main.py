@@ -215,11 +215,6 @@ async def receive_webhook(request: Request):
             description = payment.get("description", "")
             counterparty = payment.get("counterparty_alias", {}).get("display_name", "")
 
-            bal_obj = payment.get("balance_after_mutation", {})
-            if bal_obj.get("value"):
-                update_stored_balance(float(bal_obj["value"]), bal_obj.get("currency", "EUR"))
-                log(f"Balance updated: €{bal_obj['value']}")
-
             if amount < 0:
                 date_str = parse_date_from_description(description, created_str)
                 save_transaction(tx_id, date_str, amount, currency, description, counterparty, "")
@@ -230,7 +225,6 @@ async def receive_webhook(request: Request):
         # ── Accepted payment request (betaalverzoek) ──
         elif "RequestResponse" in obj:
             rr = obj["RequestResponse"]
-            # Only track accepted responses (money actually left the account)
             if rr.get("status") != "ACCEPTED":
                 log(f"Request response skipped (status={rr.get('status')})")
                 return {"status": "ok"}
@@ -242,11 +236,6 @@ async def receive_webhook(request: Request):
             currency = amount_obj.get("currency", "EUR")
             description = rr.get("description", "Betaalverzoek")
             counterparty = (rr.get("counterparty_alias") or {}).get("display_name", "")
-
-            bal_obj = rr.get("balance_after_mutation", {})
-            if bal_obj and bal_obj.get("value"):
-                update_stored_balance(float(bal_obj["value"]), bal_obj.get("currency", "EUR"))
-                log(f"Balance updated: €{bal_obj['value']}")
 
             date_str = parse_date_from_description(description, created_str)
             save_transaction(tx_id, date_str, amount, currency, description, counterparty, "")

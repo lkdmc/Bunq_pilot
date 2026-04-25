@@ -8,7 +8,6 @@ from datetime import datetime
 
 WEBHOOK_URL = "http://127.0.0.1:8000/webhook"
 
-balance = 25000.0
 tx_counter = 1
 
 MONTHLY_FIXED = [
@@ -99,8 +98,7 @@ PERIODIC = [
 ]
 
 def send_payment(date: datetime, counterparty: str, description: str, amount: float):
-    global balance, tx_counter
-    balance -= amount
+    global tx_counter
     payload = {
         "NotificationUrl": {
             "event_type": "PAYMENT_CREATED",
@@ -109,7 +107,6 @@ def send_payment(date: datetime, counterparty: str, description: str, amount: fl
                     "id": f"seed-{tx_counter:04d}",
                     "created": date.strftime("%Y-%m-%d %H:%M:%S"),
                     "amount": {"value": f"-{amount:.2f}", "currency": "EUR"},
-                    "balance_after_mutation": {"value": f"{balance:.2f}", "currency": "EUR"},
                     "description": f"{description} {date.strftime('%d-%m-%Y')}",
                     "counterparty_alias": {"display_name": counterparty},
                 }
@@ -123,8 +120,7 @@ def send_payment(date: datetime, counterparty: str, description: str, amount: fl
 
 def send_request_response(date: datetime, counterparty: str, description: str, amount: float):
     """Simulate accepting a payment request someone sent to us."""
-    global balance, tx_counter
-    balance -= amount
+    global tx_counter
     payload = {
         "NotificationUrl": {
             "event_type": "REQUEST_RESPONSE_CREATED",
@@ -135,7 +131,6 @@ def send_request_response(date: datetime, counterparty: str, description: str, a
                     "status": "ACCEPTED",
                     "amount_inquired": {"value": f"{amount:.2f}", "currency": "EUR"},
                     "amount_responded": {"value": f"{amount:.2f}", "currency": "EUR"},
-                    "balance_after_mutation": {"value": f"{balance:.2f}", "currency": "EUR"},
                     "description": f"{description} {date.strftime('%d-%m-%Y')}",
                     "counterparty_alias": {"display_name": counterparty},
                 }
