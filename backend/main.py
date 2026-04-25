@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from typing import List, Dict, Any, Tuple, Optional
 import anthropic
 from dotenv import load_dotenv, find_dotenv
-from bunq_client import get_recent_transactions, get_balance as get_balance_from_sdk, setup_bunq
+from bunq_client import get_recent_transactions, get_balance as get_balance_from_sdk, setup_bunq, create_request_inquiry
 
 load_dotenv(find_dotenv())
 
@@ -446,22 +446,13 @@ class RequestMoneyInput(BaseModel):
 
 @app.post("/api/request-money")
 async def request_money(input_data: RequestMoneyInput):
-    if not setup_bunq():
-        raise HTTPException(status_code=503, detail="bunq SDK not configured. Check BUNQ_API_KEY and bunq.conf.")
     try:
-        from bunq.sdk.model.generated.endpoint import RequestInquiry
-        from bunq.sdk.model.generated.object_ import Amount, Pointer
-        from bunq.sdk.context.bunq_context import BunqContext
-
-        account_id = BunqContext.user_context().primary_monetary_account.id_
-        result = RequestInquiry.create(
-            amount_inquired=Amount(str(input_data.amount), "EUR"),
-            counterparty_alias=Pointer("EMAIL", "sugardaddy@bunq.com", "Sugar Daddy"),
+        req_id = create_request_inquiry(
+            amount=str(input_data.amount),
             description=input_data.description,
-            allow_bunqme=False,
-            monetary_account_id=account_id,
+            counterparty_email="sugardaddy@bunq.com",
         )
-        log(f"Request inquiry sent: €{input_data.amount} — {input_data.description} (id={result.value})")
+        log(f"Request inquiry sent: €{input_data.amount} — {input_data.description} (id={req_id})")
         return {"status": "ok", "detail": f"Request sent for €{input_data.amount}"}
     except Exception as e:
         log(f"Request inquiry failed: {e}")
