@@ -93,6 +93,26 @@ def create_request_inquiry(amount: str, description: str, counterparty_email: st
     )
     return result.value
 
+def _extract_display_name(alias) -> str:
+    """Extract display name from MonetaryAccountReference (SDK v1.28+) or LabelMonetaryAccount."""
+    if alias is None:
+        return "Unknown"
+    # SDK v1.28+: MonetaryAccountReference has label_monetary_account and pointer
+    lma = getattr(alias, 'label_monetary_account', None)
+    if lma:
+        name = getattr(lma, 'display_name', None)
+        if name:
+            return name
+    ptr = getattr(alias, 'pointer', None)
+    if ptr:
+        name = getattr(ptr, 'name', None)
+        if name:
+            return name
+    # Older SDK: LabelMonetaryAccount has display_name directly
+    name = getattr(alias, 'display_name', None)
+    return name or "Unknown"
+
+
 def get_recent_transactions(limit=10):
     if not setup_bunq():
         return []
@@ -104,9 +124,7 @@ def get_recent_transactions(limit=10):
             amount = p.amount.value if p.amount else "0.00"
             currency = p.amount.currency if p.amount else "EUR"
             date = p.created.split(" ")[0] if p.created else "Unknown"
-            merchant = (p.counterparty_alias.display_name
-                        if p.counterparty_alias and p.counterparty_alias.display_name
-                        else "Unknown")
+            merchant = _extract_display_name(p.counterparty_alias)
             desc = p.description or "No description"
             formatted_tx.append({
                 "id": str(p.id_),
