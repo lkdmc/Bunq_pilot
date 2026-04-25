@@ -16,6 +16,10 @@ from bunq_client import get_recent_transactions, get_balance as get_balance_from
 
 load_dotenv()
 
+# ── Diagnostic ────────────────────────────────────────
+_key = os.getenv("ANTHROPIC_API_KEY", "")
+print(f"[startup] ANTHROPIC_API_KEY: '{_key[:18]}...{_key[-4:]}' (len={len(_key)})")
+
 app = FastAPI()
 
 app.add_middleware(
