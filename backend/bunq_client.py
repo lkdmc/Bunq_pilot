@@ -26,14 +26,31 @@ def get_balance():
     if not setup_bunq():
         return None
     try:
-        from bunq.sdk.model.generated.endpoint import MonetaryAccountBank
+        from bunq.sdk.context.bunq_context import BunqContext
         user_context = BunqContext.user_context()
-        monetary_account_id = user_context.primary_monetary_account.id_
-        account = MonetaryAccountBank.get(monetary_account_id)
-        bal = account.value.balance
+        account = user_context.primary_monetary_account
+        # Try direct balance attribute first (some SDK versions expose it)
+        if hasattr(account, 'balance') and account.balance is not None:
+            bal = account.balance
+            return {"balance": float(bal.value), "currency": bal.currency}
+        # Fall back to fetching via MonetaryAccountBank (try both naming conventions)
+        account_id = account.id_
+        try:
+            from bunq.sdk.model.generated.endpoint import MonetaryAccountBankApiObject as MAB
+        except ImportError:
+            from bunq.sdk.model.generated.endpoint import MonetaryAccountBank as MAB
+        result = MAB.get(account_id)
+        bal = result.value.balance
         return {"balance": float(bal.value), "currency": bal.currency}
     except Exception as e:
         print(f"Error fetching balance from SDK: {e}")
+        # Debug: show available monetary account classes
+        try:
+            import bunq.sdk.model.generated.endpoint as ep
+            ma_classes = [x for x in dir(ep) if 'onetary' in x]
+            print(f"  Available monetary classes: {ma_classes}")
+        except Exception:
+            pass
         return None
 
 def get_recent_transactions(limit=10):
