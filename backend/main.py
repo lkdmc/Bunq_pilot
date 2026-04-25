@@ -285,6 +285,8 @@ async def chat_with_finn(input_data: MessageInput):
             messages=messages
         )
         return {"response": response.content[0].text}
+    except anthropic.AuthenticationError:
+        raise HTTPException(status_code=503, detail="Anthropic API key is invalid. Please update ANTHROPIC_API_KEY in .env.")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -348,14 +350,17 @@ Each line: one emoji + brief description of what the service likely is (max 8 wo
 Payments:
 {subs_text}"""
 
-    message = anthropic_client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=300,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    advice_lines = [l.strip() for l in message.content[0].text.strip().split("\n") if l.strip()]
-    for i, sub in enumerate(subs):
-        sub["advice"] = advice_lines[i] if i < len(advice_lines) else ""
+    try:
+        message = anthropic_client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        advice_lines = [l.strip() for l in message.content[0].text.strip().split("\n") if l.strip()]
+        for i, sub in enumerate(subs):
+            sub["advice"] = advice_lines[i] if i < len(advice_lines) else ""
+    except Exception:
+        pass
 
     return subs
 
@@ -387,19 +392,22 @@ async def api_predict():
 
     finn_summary = ""
     if anthropic_client and current_spend > 0:
-        prompt = f"""You are Finn, a friendly financial assistant. Give a 2-sentence spending forecast.
+        try:
+            prompt = f"""You are Finn, a friendly financial assistant. Give a 2-sentence spending forecast.
 
 This month so far: €{current_spend:.2f} in {days_elapsed} days (€{daily_rate:.2f}/day)
 Projected month total: €{predicted_total:.2f}
 Current balance: €{balance:.2f} → Predicted end balance: €{predicted_end_balance:.2f}
 
 Be direct and use 1-2 emojis."""
-        message = anthropic_client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=100,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        finn_summary = message.content[0].text.strip()
+            message = anthropic_client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=100,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            finn_summary = message.content[0].text.strip()
+        except Exception:
+            pass
 
     return {
         "days_elapsed": days_elapsed,
