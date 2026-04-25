@@ -178,12 +178,9 @@ if __name__ == "__main__":
     random.seed(42)  # reset seed for actual run
 
     print(f"\nTotal spend to seed: €{total_spend:.2f}")
-    needed = total_spend + 500
-    chunk = 49999.0
-    n = -(-int(needed) // int(chunk))  # ceiling division
-    print(f"Requesting €{needed:.2f} in {n} × €{chunk:.0f} chunks from Sugar Daddy...")
-    for _ in range(n):
-        request_topup(account_id, chunk)
+    print("Requesting top-up from Sugar Daddy (10 × €9,999)...")
+    for _ in range(10):
+        request_topup(account_id, 9999.0)
     print("Waiting 5s for Sugar Daddy to process...")
     time.sleep(5)
 
