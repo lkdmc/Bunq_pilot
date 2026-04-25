@@ -110,6 +110,10 @@ def parse_date_from_description(description: str, fallback: str) -> str:
         return f"{year}-{month}-{day}"
     return fallback[:10]
 
+def extract_merchant_from_description(description: str) -> str:
+    """Strip trailing DD-MM-YYYY date appended by seed_real.py to get merchant name."""
+    return re.sub(r'\s+\d{2}-\d{2}-\d{4}\s*$', '', description).strip()
+
 def save_transaction(tx_id, date_str, amount, currency, description, counterparty, category):
     dt = datetime.fromisoformat(date_str[:10])
     conn = sqlite3.connect("spending.db")
@@ -188,6 +192,8 @@ def get_available_months() -> List[Tuple[int, int]]:
     return rows
 
 # ── Webhook ───────────────────────────────────────────
+HANDLED_EVENTS = {"PAYMENT_CREATED", "REQUEST_RESPONSE_CREATED"}
+
 @app.post("/webhook")
 async def receive_webhook(request: Request):
     body = await request.json()
@@ -195,13 +201,14 @@ async def receive_webhook(request: Request):
         notification = body.get("NotificationUrl", {})
         event_type = notification.get("event_type", "")
 
-        # Deduplicate: only process PAYMENT_CREATED (ignore PAYMENT_RECEIVED etc.)
-        if event_type and event_type != "PAYMENT_CREATED":
+        if event_type and event_type not in HANDLED_EVENTS:
             log(f"Skipping event: {event_type}")
             return {"status": "ok"}
 
-        log(f"Webhook received: {json.dumps(body)[:150]}")
+        log(f"Webhook received ({event_type}): {json.dumps(body)[:120]}")
         obj = notification.get("object", {})
+
+        # ── Regular outgoing payment ──────────────────
         if "Payment" in obj:
             payment = obj["Payment"]
             tx_id = str(payment.get("id"))
@@ -212,32 +219,76 @@ async def receive_webhook(request: Request):
             description = payment.get("description", "")
             counterparty = payment.get("counterparty_alias", {}).get("display_name", "")
 
-            # Store balance after mutation if present
-            bal_obj = payment.get("balance_after_mutation", {})
-            if bal_obj.get("value"):
-                update_stored_balance(float(bal_obj["value"]), bal_obj.get("currency", "EUR"))
-                log(f"Balance updated: €{bal_obj['value']}")
-
             if amount < 0:
                 date_str = parse_date_from_description(description, created_str)
-                log(f"Outgoing payment: {description} | {counterparty} | €{amount} | date: {date_str}")
-                save_transaction(tx_id, date_str, amount, currency, description, counterparty, "")
-                log("Saved to DB.")
+                # Real bunq payments go to "Sugar Daddy" sink; merchant is in description
+                if counterparty.lower() in ("sugar daddy", ""):
+                    merchant = extract_merchant_from_description(description)
+                    if merchant:
+                        counterparty = merchant
+                category = classify(counterparty, description)
+                save_transaction(tx_id, date_str, amount, currency, description, counterparty, category)
+                log(f"Saved payment: {counterparty} €{amount} [{category}]")
             else:
                 log(f"Incoming payment skipped: €{amount} from {counterparty}")
+
+        # ── Accepted payment request (betaalverzoek) ──
+        elif "RequestResponse" in obj:
+            rr = obj["RequestResponse"]
+            if rr.get("status") != "ACCEPTED":
+                log(f"Request response skipped (status={rr.get('status')})")
+                return {"status": "ok"}
+
+            tx_id = f"rr-{rr.get('id')}"
+            created_str = rr.get("created", "")
+            amount_obj = rr.get("amount_responded") or rr.get("amount_inquired", {})
+            amount = -abs(float(amount_obj.get("value", 0)))
+            currency = amount_obj.get("currency", "EUR")
+            description = rr.get("description", "Betaalverzoek")
+            counterparty = (rr.get("counterparty_alias") or {}).get("display_name", "")
+
+            date_str = parse_date_from_description(description, created_str)
+            category = classify(counterparty, description)
+            save_transaction(tx_id, date_str, amount, currency, description, counterparty, category)
+            log(f"Saved request response: {counterparty} €{amount} [{category}]")
+
     except Exception as e:
         log(f"ERROR: {e}")
     return {"status": "ok"}
 
+# ── Category classifier ───────────────────────────────
+CATEGORY_RULES = [
+    ("Housing",      ["vesteda", "huur", "woning", "hypotheek"]),
+    ("Insurance",    ["zilveren kruis", "menzis", "centraal beheer", "verzekering", "zorgpremie"]),
+    ("Utilities",    ["vattenfall", "eneco", "nuon", "vitens", "evides", "waterschap", "energie", "water"]),
+    ("Groceries",    ["albert heijn", "jumbo", "lidl", "aldi", "plus", "dekamarkt", "dirk", "spar", "hoogvliet"]),
+    ("Dining",       ["restaurant", "cafe", "pathe", "mcdonalds", "starbucks", "thuisbezorgd", "uber eats", "dominos", "subway", "sushi", "vapiano", "broodje"]),
+    ("Transport",    ["ns reizen", "ov-chipkaart", "uber", "bolt", "shell", "bp", "tankstation", "q-park", "parking", "rdw"]),
+    ("Streaming",    ["netflix", "spotify", "disney", "videoland", "apple tv", "hbo"]),
+    ("Subscriptions",["kpn", "ziggo", "odido", "amazon prime", "apple icloud", "adobe", "linkedin", "basic fit", "gym"]),
+    ("Government",   ["belastingdienst", "gemeente", "duo", "cak", "rdw motorrijtuig"]),
+    ("Shopping",     ["zalando", "coolblue", "bol.com", "h&m", "zara", "ikea", "primark", "hema", "mediamarkt", "kruidvat", "action", "decathlon", "rituals"]),
+    ("Health",       ["apotheek", "huisarts", "tandarts", "fysio", "kruidvat"]),
+    ("Friends",      ["thomas", "emma", "liam", "sophie", "noah", "olivia", "lucas", "mia", "betaalverzoek"]),
+]
+
+def classify(counterparty: str, description: str) -> str:
+    text = (counterparty + " " + description).lower()
+    for category, keywords in CATEGORY_RULES:
+        if any(kw in text for kw in keywords):
+            return category
+    return "Other"
+
 # ── React API ─────────────────────────────────────────
 @app.get("/api/balance")
 async def api_balance():
+    sdk_bal = get_balance_from_sdk()
+    if sdk_bal and sdk_bal.get("balance") is not None:
+        update_stored_balance(sdk_bal["balance"], sdk_bal.get("currency", "EUR"))
+        return sdk_bal
     stored = get_stored_balance()
     if stored:
         return stored
-    sdk_bal = get_balance_from_sdk()
-    if sdk_bal:
-        return sdk_bal
     return {"balance": None, "currency": "EUR", "updated_at": None}
 
 @app.get("/api/transactions")
@@ -350,6 +401,26 @@ def detect_subscriptions() -> list:
 
     return sorted(result, key=lambda x: -x["avg_amount"])
 
+@app.post("/api/admin/fix-counterparties")
+async def fix_counterparties():
+    """One-time migration: fix transactions where counterparty='Sugar Daddy'."""
+    conn = sqlite3.connect("spending.db")
+    c = conn.cursor()
+    c.execute("SELECT id, description FROM transactions WHERE counterparty = 'Sugar Daddy'")
+    rows = c.fetchall()
+    updated = 0
+    for tx_id, description in rows:
+        merchant = extract_merchant_from_description(description)
+        if merchant and merchant != "Sugar Daddy":
+            new_category = classify(merchant, description)
+            c.execute("UPDATE transactions SET counterparty=?, category=? WHERE id=?",
+                      (merchant, new_category, tx_id))
+            updated += 1
+    conn.commit()
+    conn.close()
+    log(f"fix-counterparties: updated {updated} records")
+    return {"fixed": updated}
+
 @app.get("/api/subscriptions")
 async def api_subscriptions():
     subs = detect_subscriptions()
@@ -438,69 +509,75 @@ Be direct and use 1-2 emojis."""
         "finn_summary": finn_summary,
     }
 
-# ── Request Money ─────────────────────────────────────
-class RequestMoneyInput(BaseModel):
-    amount: str = "400.00"
-    description: str = "Request money"
+@app.get("/api/monthly-trend")
+async def api_monthly_trend():
+    conn = sqlite3.connect("spending.db")
+    c = conn.cursor()
+    c.execute("""
+        SELECT year, month, SUM(ABS(amount)), category
+        FROM transactions
+        WHERE amount < 0
+        GROUP BY year, month
+        ORDER BY year, month
+    """)
+    # Aggregate by month with category breakdown
+    from collections import defaultdict
+    monthly: Dict[str, Any] = {}
+    conn2 = sqlite3.connect("spending.db")
+    c2 = conn2.cursor()
+    c2.execute("""
+        SELECT year, month, SUM(ABS(amount)) as total
+        FROM transactions WHERE amount < 0
+        GROUP BY year, month ORDER BY year, month
+    """)
+    for year, month, total in c2.fetchall():
+        key = f"{year}-{month:02d}"
+        monthly[key] = {"year": year, "month": month, "total": round(total, 2), "label": datetime(year, month, 1).strftime("%b '%y")}
+    c2.execute("""
+        SELECT year, month, category, SUM(ABS(amount))
+        FROM transactions WHERE amount < 0
+        GROUP BY year, month, category
+    """)
+    for year, month, cat, amt in c2.fetchall():
+        key = f"{year}-{month:02d}"
+        if key in monthly:
+            if "categories" not in monthly[key]:
+                monthly[key]["categories"] = {}
+            monthly[key]["categories"][cat or "Other"] = round(amt, 2)
+    conn.close()
+    conn2.close()
+    return list(monthly.values())
 
-@app.post("/api/request-money")
-async def request_money(input_data: RequestMoneyInput):
-    import base64
-    import uuid
-    import requests as req
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
-    from cryptography.hazmat.backends import default_backend
+class BudgetInput(BaseModel):
+    amount: float
+    year: int
+    month: int
 
-    session_token = os.getenv("BUNQ_SESSION_TOKEN", "")
-    user_id = os.getenv("BUNQ_USER_ID", "")
-    account_id = os.getenv("BUNQ_MONETARY_ACCOUNT_ID", "")
-    key_path = os.getenv("BUNQ_PRIVATE_KEY_PATH", "private.pem")
+@app.post("/api/budget")
+async def set_budget(b: BudgetInput):
+    conn = sqlite3.connect("spending.db")
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS budgets
+        (year INTEGER, month INTEGER, amount REAL, PRIMARY KEY (year, month))
+    """)
+    c.execute("INSERT OR REPLACE INTO budgets (year, month, amount) VALUES (?, ?, ?)",
+              (b.year, b.month, b.amount))
+    conn.commit()
+    conn.close()
+    return {"status": "ok"}
 
-    if not session_token or not user_id or not account_id:
-        raise HTTPException(status_code=503, detail="bunq credentials not configured.")
-
-    payload = json.dumps({
-        "amount_inquired": {"value": str(input_data.amount), "currency": "EUR"},
-        "description": input_data.description,
-        "allow_bunqme": False,
-        "counterparty_alias": {"type": "EMAIL", "value": "sugardaddy@bunq.com", "name": "Sugar Daddy"}
-    }, separators=(',', ':'))
-
+@app.get("/api/budget/{year}/{month}")
+async def get_budget(year: int, month: int):
+    conn = sqlite3.connect("spending.db")
+    c = conn.cursor()
     try:
-        with open(key_path, "rb") as f:
-            private_key = serialization.load_pem_private_key(f.read(), password=None, backend=default_backend())
-        signature = base64.b64encode(
-            private_key.sign(payload.encode("utf-8"), asym_padding.PKCS1v15(), hashes.SHA256())
-        ).decode("utf-8")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Signing failed: {e}")
-
-    request_id = str(uuid.uuid4())
-    url = f"https://public-api.sandbox.bunq.com/v1/user/{user_id}/monetary-account/{account_id}/request-inquiry"
-    headers = {
-        "Content-Type": "application/json",
-        "Cache-Control": "no-cache",
-        "User-Agent": "hackathon",
-        "X-Bunq-Language": "en_US",
-        "X-Bunq-Region": "nl_NL",
-        "X-Bunq-Geolocation": "0 0 0 0 000",
-        "X-Bunq-Client-Request-Id": request_id,
-        "X-Bunq-Client-Authentication": session_token,
-        "X-Bunq-Client-Signature": signature,
-    }
-
-    try:
-        response = req.post(url, headers=headers, data=payload, timeout=10)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"bunq API unreachable: {e}")
-
-    if response.status_code == 200:
-        log(f"Request inquiry sent: €{input_data.amount} — {input_data.description}")
-        return {"status": "ok", "detail": f"Request sent for €{input_data.amount}"}
-    else:
-        log(f"Request inquiry failed ({response.status_code}): {response.text[:200]}")
-        raise HTTPException(status_code=response.status_code, detail=response.text[:200])
+        c.execute("SELECT amount FROM budgets WHERE year=? AND month=?", (year, month))
+        row = c.fetchone()
+    except Exception:
+        row = None
+    conn.close()
+    return {"amount": row[0] if row else None}
 
 # ── Debug dashboard (server-side HTML) ───────────────
 @app.get("/", response_class=HTMLResponse)

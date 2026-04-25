@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from 'react';
-import { createPortal } from 'react-dom';
 
 const getIconForMerchant = (merchant) => {
   if (merchant.includes('Starbucks')) return { icon: '☕', bg: 'bg-green-900', text: 'text-green-400' };
@@ -25,25 +24,26 @@ export default function App() {
   const [forecast, setForecast] = useState(null);
   const [forecastLoading, setForecastLoading] = useState(false);
   const [accountBalance, setAccountBalance] = useState(null);
-  const [showAddMoney, setShowAddMoney] = useState(false);
-  const [addMoneyAmount, setAddMoneyAmount] = useState('');
-  const [addMoneyDesc, setAddMoneyDesc] = useState('');
-  const [addMoneyLoading, setAddMoneyLoading] = useState(false);
-  const [addMoneyResult, setAddMoneyResult] = useState(null);
   const [txLimit, setTxLimit] = useState(5);
+  const [refreshing, setRefreshing] = useState(false);
+  const [trend, setTrend] = useState([]);
+  const [budget, setBudget] = useState(() => { const s = localStorage.getItem('monthly_budget'); return s ? parseFloat(s) : null; });
+  const [budgetInput, setBudgetInput] = useState('');
+  const [budgetEditing, setBudgetEditing] = useState(false);
   const chatBoxRef = useRef(null);
 
-  useEffect(() => {
-    fetch('http://127.0.0.1:8000/api/transactions')
-      .then(res => res.json())
-      .then(data => setTransactions(data))
-      .catch(err => console.error('Failed to fetch transactions:', err));
+  const fetchHomeData = () => {
+    setRefreshing(true);
+    Promise.all([
+      fetch('http://127.0.0.1:8000/api/transactions').then(r => r.json()),
+      fetch('http://127.0.0.1:8000/api/balance').then(r => r.json()),
+    ]).then(([txData, balData]) => {
+      setTransactions(txData);
+      if (balData.balance !== null) setAccountBalance(balData.balance);
+    }).catch(() => {}).finally(() => setRefreshing(false));
+  };
 
-    fetch('http://127.0.0.1:8000/api/balance')
-      .then(res => res.json())
-      .then(data => { if (data.balance !== null) setAccountBalance(data.balance); })
-      .catch(() => {});
-  }, []);
+  useEffect(() => { fetchHomeData(); }, []);
 
   useEffect(() => {
     if (currentTab === 'subs' && subscriptions.length === 0) {
@@ -53,8 +53,12 @@ export default function App() {
         .then(data => { setSubscriptions(data); setSubsLoading(false); })
         .catch(() => setSubsLoading(false));
     }
-    if (currentTab === 'forecast' && !forecast) {
-      loadForecast();
+    if (currentTab === 'forecast') {
+      if (!forecast) loadForecast();
+      if (trend.length === 0) {
+        fetch('http://127.0.0.1:8000/api/monthly-trend')
+          .then(r => r.json()).then(data => setTrend(data)).catch(() => {});
+      }
     }
   }, [currentTab]);
 
@@ -70,31 +74,6 @@ export default function App() {
       .then(res => res.json())
       .then(data => { setForecast(data); setForecastLoading(false); })
       .catch(() => setForecastLoading(false));
-  };
-
-  const handleAddMoney = async () => {
-    const amount = parseFloat(addMoneyAmount);
-    if (!addMoneyAmount || isNaN(amount) || amount <= 0) return;
-    setAddMoneyLoading(true);
-    setAddMoneyResult(null);
-    try {
-      const res = await fetch('http://127.0.0.1:8000/api/request-money', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amount: amount.toFixed(2), description: addMoneyDesc || 'Request money' })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setAddMoneyResult({ ok: true, msg: data.detail });
-        setTimeout(() => { setShowAddMoney(false); setAddMoneyResult(null); setAddMoneyAmount(''); setAddMoneyDesc(''); }, 2000);
-      } else {
-        setAddMoneyResult({ ok: false, msg: data.detail || 'Request failed' });
-      }
-    } catch {
-      setAddMoneyResult({ ok: false, msg: 'Could not reach backend' });
-    } finally {
-      setAddMoneyLoading(false);
-    }
   };
 
   const sendMessage = async (textToUse) => {
@@ -128,8 +107,10 @@ export default function App() {
         <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center overflow-hidden border border-gray-700">
           <span className="text-xl">🐜</span>
         </div>
-        <div className="flex gap-4 text-gray-300">
-          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4h4v4H4zM16 4h4v4h-4zM4 16h4v4H4zM14 16h6v6h-6zM10 4v4M14 4v4M10 20v-4M10 10h4v4h-4z" /></svg>
+        <div className="flex gap-4 text-gray-300 items-center">
+          <button onClick={fetchHomeData} disabled={refreshing} className="text-gray-300 disabled:opacity-40 transition">
+            <svg className={`w-6 h-6 ${refreshing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+          </button>
           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
         </div>
       </div>
@@ -156,7 +137,7 @@ export default function App() {
           <div className="w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center"><svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" /></svg></div>
           <span className="text-xs font-semibold text-blue-400">Request</span>
         </button>
-        <button className="flex-1 btn-add-money rounded-xl py-3 flex flex-col items-center gap-1 bg-[#2D0A4E]" onClick={() => { setShowAddMoney(true); setAddMoneyResult(null); }}>
+        <button className="flex-1 btn-add-money rounded-xl py-3 flex flex-col items-center gap-1 bg-[#2D0A4E]">
           <div className="w-5 h-5 rounded-full bg-purple-500 flex items-center justify-center"><svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg></div>
           <span className="text-xs font-semibold text-purple-400">Add Money</span>
         </button>
@@ -349,7 +330,88 @@ export default function App() {
               </div>
             </div>
 
+            {/* Budget */}
+            {(() => {
+              const now = new Date();
+              const budgetPct = budget && forecast ? Math.min((forecast.current_spend / budget) * 100, 100) : 0;
+              const overBudget = budget && forecast && forecast.predicted_total > budget;
+              return (
+                <div className="bunq-card p-4 mb-4">
+                  <div className="flex justify-between items-center mb-2">
+                    <p className="text-gray-400 text-xs">MONTHLY BUDGET</p>
+                    <button onClick={() => { setBudgetEditing(true); setBudgetInput(budget || ''); }} className="text-xs text-blue-400">
+                      {budget ? 'Edit' : 'Set budget'}
+                    </button>
+                  </div>
+                  {budgetEditing ? (
+                    <div className="flex gap-2 items-center">
+                      <span className="text-gray-400">€</span>
+                      <input type="number" value={budgetInput} onChange={e => setBudgetInput(e.target.value)}
+                        className="flex-1 bg-[#2C2C2E] rounded-lg px-3 py-2 text-white text-sm outline-none"
+                        placeholder="e.g. 2000" autoFocus />
+                      <button onClick={() => {
+                        const val = parseFloat(budgetInput);
+                        if (!isNaN(val) && val > 0) {
+                          setBudget(val);
+                          localStorage.setItem('monthly_budget', val);
+                          fetch('http://127.0.0.1:8000/api/budget', { method: 'POST', headers: {'Content-Type':'application/json'},
+                            body: JSON.stringify({ amount: val, year: now.getFullYear(), month: now.getMonth() + 1 }) }).catch(() => {});
+                        }
+                        setBudgetEditing(false);
+                      }} className="bg-blue-600 text-white text-xs px-3 py-2 rounded-lg">Save</button>
+                    </div>
+                  ) : budget && forecast ? (
+                    <>
+                      <div className="flex justify-between text-sm mb-2">
+                        <span className={overBudget ? 'text-red-400 font-bold' : 'text-white'}>
+                          €{forecast.current_spend.toFixed(0)} / €{budget.toFixed(0)}
+                        </span>
+                        <span className={overBudget ? 'text-red-400' : 'text-gray-400'}>
+                          {overBudget ? `⚠ €${(forecast.predicted_total - budget).toFixed(0)} over` : `€${(budget - forecast.predicted_total).toFixed(0)} remaining`}
+                        </span>
+                      </div>
+                      <div className="w-full bg-gray-800 rounded-full h-2">
+                        <div className={`h-2 rounded-full transition-all ${overBudget ? 'bg-red-500' : budgetPct > 80 ? 'bg-orange-400' : 'bg-green-500'}`}
+                          style={{ width: `${budgetPct}%` }} />
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-gray-600 text-sm">No budget set</p>
+                  )}
+                </div>
+              );
+            })()}
 
+            {/* Monthly trend chart */}
+            {trend.length > 0 && (() => {
+              const recent = trend.slice(-12);
+              const max = Math.max(...recent.map(m => m.total));
+              return (
+                <div className="bunq-card p-4 mb-4">
+                  <p className="text-gray-400 text-xs mb-4">MONTHLY SPENDING</p>
+                  <div className="flex items-end gap-1 h-28">
+                    {recent.map((m, i) => {
+                      const h = Math.round((m.total / max) * 100);
+                      const isCurrentMonth = m.year === new Date().getFullYear() && m.month === new Date().getMonth() + 1;
+                      return (
+                        <div key={i} className="flex-1 flex flex-col items-center gap-1">
+                          <div className="w-full flex items-end justify-center" style={{ height: '96px' }}>
+                            <div
+                              className={`w-full rounded-t-sm transition-all ${isCurrentMonth ? 'bg-blue-500' : budget && m.total > budget ? 'bg-red-500/70' : 'bg-gray-600'}`}
+                              style={{ height: `${h}%` }}
+                            />
+                          </div>
+                          <p className="text-[9px] text-gray-500 truncate w-full text-center">{m.label}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="flex justify-between text-[10px] text-gray-600 mt-1">
+                    <span>€0</span><span>€{max.toFixed(0)}</span>
+                  </div>
+                </div>
+              );
+            })()}
           </>
         ) : (
           <div className="text-center text-gray-500 mt-24">No transaction data yet</div>
@@ -443,57 +505,6 @@ export default function App() {
     ai: renderChat,
   };
 
-  const renderAddMoneyModal = () => (
-    <div className="fixed inset-0 z-[100] flex items-end justify-center" onClick={() => setShowAddMoney(false)}>
-      <div className="absolute inset-0 bg-black/60" />
-      <div className="relative w-full max-w-[430px] bg-[#1C1C1E] rounded-t-2xl p-6 pb-10" onClick={e => e.stopPropagation()}>
-        <div className="w-10 h-1 bg-gray-600 rounded-full mx-auto mb-5" />
-        <h2 className="text-lg font-bold text-white mb-1">Add Money</h2>
-        <p className="text-xs text-gray-400 mb-5">Sends a payment request to sugardaddy@bunq.com</p>
-
-        <label className="text-xs text-gray-400 mb-1 block">Amount (EUR)</label>
-        <div className="flex items-center bg-[#2C2C2E] rounded-xl px-4 py-3 mb-4">
-          <span className="text-gray-400 mr-2 text-lg">€</span>
-          <input
-            type="number"
-            min="0.01"
-            step="0.01"
-            placeholder="0.00"
-            value={addMoneyAmount}
-            onChange={e => setAddMoneyAmount(e.target.value)}
-            className="flex-1 bg-transparent outline-none text-white text-lg placeholder-gray-600"
-            autoFocus
-          />
-        </div>
-
-        <label className="text-xs text-gray-400 mb-1 block">Description</label>
-        <div className="flex items-center bg-[#2C2C2E] rounded-xl px-4 py-3 mb-6">
-          <input
-            type="text"
-            placeholder="Request money"
-            value={addMoneyDesc}
-            onChange={e => setAddMoneyDesc(e.target.value)}
-            className="flex-1 bg-transparent outline-none text-white text-sm placeholder-gray-600"
-          />
-        </div>
-
-        {addMoneyResult && (
-          <p className={`text-sm text-center mb-4 ${addMoneyResult.ok ? 'text-green-400' : 'text-red-400'}`}>
-            {addMoneyResult.ok ? '✓ ' : '✗ '}{addMoneyResult.msg}
-          </p>
-        )}
-
-        <button
-          onClick={handleAddMoney}
-          disabled={addMoneyLoading || !addMoneyAmount}
-          className="w-full py-3.5 rounded-xl bg-purple-600 text-white font-bold text-sm disabled:opacity-50 transition"
-        >
-          {addMoneyLoading ? 'Sending...' : 'Send Request'}
-        </button>
-      </div>
-    </div>
-  );
-
   return (
     <div className="flex items-center justify-center min-h-screen bg-gray-900">
       <div className="app-container">
@@ -519,7 +530,6 @@ export default function App() {
         </div>
       </div>
 
-      {showAddMoney && createPortal(renderAddMoneyModal(), document.body)}
     </div>
   );
 }
