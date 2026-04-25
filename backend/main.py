@@ -952,7 +952,7 @@ def dashboard():
 
     logs_html = "\n".join(reversed(list(log_buffer)))
 
-    html = f"""<!DOCTYPE html>
+    page_html = f"""<!DOCTYPE html>
 <html>
 <head>
     <title>bunq Spending Tracker — Debug</title>
@@ -1013,7 +1013,7 @@ def dashboard():
     </div>
 </body>
 </html>"""
-    return html
+    return page_html
 
 @app.get("/report-page/{year}/{month}", response_class=HTMLResponse)
 def report_page(year: int, month: int):
