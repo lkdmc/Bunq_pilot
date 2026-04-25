@@ -229,7 +229,7 @@ export default function App() {
   };
 
   const renderForecast = () => {
-    const maxCat = forecast ? Math.max(...Object.values(forecast.category_breakdown), 1) : 1;
+  
     const pct = forecast ? Math.round((forecast.days_elapsed / (forecast.days_elapsed + forecast.days_remaining)) * 100) : 0;
 
     return (
@@ -299,23 +299,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* Category breakdown */}
-            {Object.keys(forecast.category_breakdown).length > 0 && (
-              <div className="bunq-card p-4">
-                <p className="text-gray-400 text-xs mb-4">SPENDING BY CATEGORY</p>
-                {Object.entries(forecast.category_breakdown)
-                  .sort((a, b) => b[1] - a[1])
-                  .map(([cat, amt]) => (
-                    <div key={cat} className="flex items-center gap-3 mb-3">
-                      <span className="text-xs text-gray-400 w-24 shrink-0">{cat}</span>
-                      <div className="flex-1 bg-gray-800 rounded-full h-1.5">
-                        <div className="bg-blue-500 h-1.5 rounded-full" style={{ width: `${(amt / maxCat) * 100}%` }} />
-                      </div>
-                      <span className="text-xs text-white w-14 text-right shrink-0">€ {amt.toFixed(0)}</span>
-                    </div>
-                  ))}
-              </div>
-            )}
+
           </>
         ) : (
           <div className="text-center text-gray-500 mt-24">No transaction data yet</div>

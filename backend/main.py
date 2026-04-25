@@ -106,25 +106,6 @@ def parse_date_from_description(description: str, fallback: str) -> str:
         return f"{year}-{month}-{day}"
     return fallback[:10]
 
-def categorize_transaction(description: str, counterparty: str, amount: float) -> str:
-    if not anthropic_client:
-        return "Other"
-    prompt = f"""Classify the following bank transaction into ONE category. Reply with only the category name.
-
-Categories: Food, Entertainment, Subscription, Transport, Shopping, Health, Utilities, Transfer, Other
-
-Transaction description: {description}
-Counterparty: {counterparty}
-Amount: {amount} EUR
-
-Category:"""
-    message = anthropic_client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=20,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return message.content[0].text.strip()
-
 def save_transaction(tx_id, date_str, amount, currency, description, counterparty, category):
     dt = datetime.fromisoformat(date_str[:10])
     conn = sqlite3.connect("spending.db")
@@ -236,13 +217,7 @@ async def receive_webhook(request: Request):
             if amount < 0:
                 date_str = parse_date_from_description(description, created_str)
                 log(f"Outgoing payment: {description} | {counterparty} | €{amount} | date: {date_str}")
-                try:
-                    category = categorize_transaction(description, counterparty, amount)
-                except Exception as cat_err:
-                    log(f"Categorization failed ({cat_err}), using 'Other'")
-                    category = "Other"
-                log(f"Category: {category}")
-                save_transaction(tx_id, date_str, amount, currency, description, counterparty, category)
+                save_transaction(tx_id, date_str, amount, currency, description, counterparty, "")
                 log("Saved to DB.")
             else:
                 log(f"Incoming payment skipped: €{amount} from {counterparty}")
@@ -403,11 +378,6 @@ async def api_predict():
         (now.year, now.month)
     )
     current_spend = abs(c.fetchone()[0] or 0)
-    c.execute(
-        "SELECT category, SUM(amount) FROM transactions WHERE year=? AND month=? AND amount < 0 GROUP BY category",
-        (now.year, now.month)
-    )
-    category_breakdown = {row[0]: round(abs(row[1]), 2) for row in c.fetchall()}
     conn.close()
 
     daily_rate = current_spend / days_elapsed if days_elapsed > 0 else 0
@@ -441,7 +411,6 @@ Be direct and use 1-2 emojis."""
         "current_balance": round(balance, 2),
         "balance_available": balance_info is not None,
         "predicted_end_balance": round(predicted_end_balance, 2),
-        "category_breakdown": category_breakdown,
         "finn_summary": finn_summary,
     }
 
