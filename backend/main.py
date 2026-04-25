@@ -438,6 +438,70 @@ Be direct and use 1-2 emojis."""
         "finn_summary": finn_summary,
     }
 
+# ── Request Money ─────────────────────────────────────
+class RequestMoneyInput(BaseModel):
+    amount: str = "400.00"
+    description: str = "Request money"
+
+@app.post("/api/request-money")
+async def request_money(input_data: RequestMoneyInput):
+    import base64
+    import uuid
+    import requests as req
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
+    from cryptography.hazmat.backends import default_backend
+
+    session_token = os.getenv("BUNQ_SESSION_TOKEN", "")
+    user_id = os.getenv("BUNQ_USER_ID", "")
+    account_id = os.getenv("BUNQ_MONETARY_ACCOUNT_ID", "")
+    key_path = os.getenv("BUNQ_PRIVATE_KEY_PATH", "private.pem")
+
+    if not session_token or not user_id or not account_id:
+        raise HTTPException(status_code=503, detail="bunq credentials not configured.")
+
+    payload = json.dumps({
+        "amount_inquired": {"value": str(input_data.amount), "currency": "EUR"},
+        "description": input_data.description,
+        "allow_bunqme": False,
+        "counterparty_alias": {"type": "EMAIL", "value": "sugardaddy@bunq.com", "name": "Sugar Daddy"}
+    }, separators=(',', ':'))
+
+    try:
+        with open(key_path, "rb") as f:
+            private_key = serialization.load_pem_private_key(f.read(), password=None, backend=default_backend())
+        signature = base64.b64encode(
+            private_key.sign(payload.encode("utf-8"), asym_padding.PKCS1v15(), hashes.SHA256())
+        ).decode("utf-8")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Signing failed: {e}")
+
+    request_id = str(uuid.uuid4())
+    url = f"https://public-api.sandbox.bunq.com/v1/user/{user_id}/monetary-account/{account_id}/request-inquiry"
+    headers = {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-cache",
+        "User-Agent": "hackathon",
+        "X-Bunq-Language": "en_US",
+        "X-Bunq-Region": "nl_NL",
+        "X-Bunq-Geolocation": "0 0 0 0 000",
+        "X-Bunq-Client-Request-Id": request_id,
+        "X-Bunq-Client-Authentication": session_token,
+        "X-Bunq-Client-Signature": signature,
+    }
+
+    try:
+        response = req.post(url, headers=headers, data=payload, timeout=10)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"bunq API unreachable: {e}")
+
+    if response.status_code == 200:
+        log(f"Request inquiry sent: €{input_data.amount} — {input_data.description}")
+        return {"status": "ok", "detail": f"Request sent for €{input_data.amount}"}
+    else:
+        log(f"Request inquiry failed ({response.status_code}): {response.text[:200]}")
+        raise HTTPException(status_code=response.status_code, detail=response.text[:200])
+
 # ── Debug dashboard (server-side HTML) ───────────────
 @app.get("/", response_class=HTMLResponse)
 def dashboard():

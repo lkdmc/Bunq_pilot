@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 
 const getIconForMerchant = (merchant) => {
   if (merchant.includes('Starbucks')) return { icon: '☕', bg: 'bg-green-900', text: 'text-green-400' };
@@ -24,6 +25,12 @@ export default function App() {
   const [forecast, setForecast] = useState(null);
   const [forecastLoading, setForecastLoading] = useState(false);
   const [accountBalance, setAccountBalance] = useState(null);
+  const [showAddMoney, setShowAddMoney] = useState(false);
+  const [addMoneyAmount, setAddMoneyAmount] = useState('');
+  const [addMoneyDesc, setAddMoneyDesc] = useState('');
+  const [addMoneyLoading, setAddMoneyLoading] = useState(false);
+  const [addMoneyResult, setAddMoneyResult] = useState(null);
+  const [txLimit, setTxLimit] = useState(5);
   const chatBoxRef = useRef(null);
 
   useEffect(() => {
@@ -63,6 +70,31 @@ export default function App() {
       .then(res => res.json())
       .then(data => { setForecast(data); setForecastLoading(false); })
       .catch(() => setForecastLoading(false));
+  };
+
+  const handleAddMoney = async () => {
+    const amount = parseFloat(addMoneyAmount);
+    if (!addMoneyAmount || isNaN(amount) || amount <= 0) return;
+    setAddMoneyLoading(true);
+    setAddMoneyResult(null);
+    try {
+      const res = await fetch('http://127.0.0.1:8000/api/request-money', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount: amount.toFixed(2), description: addMoneyDesc || 'Request money' })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setAddMoneyResult({ ok: true, msg: data.detail });
+        setTimeout(() => { setShowAddMoney(false); setAddMoneyResult(null); setAddMoneyAmount(''); setAddMoneyDesc(''); }, 2000);
+      } else {
+        setAddMoneyResult({ ok: false, msg: data.detail || 'Request failed' });
+      }
+    } catch {
+      setAddMoneyResult({ ok: false, msg: 'Could not reach backend' });
+    } finally {
+      setAddMoneyLoading(false);
+    }
   };
 
   const sendMessage = async (textToUse) => {
@@ -124,7 +156,7 @@ export default function App() {
           <div className="w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center"><svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" /></svg></div>
           <span className="text-xs font-semibold text-blue-400">Request</span>
         </button>
-        <button className="flex-1 btn-add-money rounded-xl py-3 flex flex-col items-center gap-1 bg-[#2D0A4E]">
+        <button className="flex-1 btn-add-money rounded-xl py-3 flex flex-col items-center gap-1 bg-[#2D0A4E]" onClick={() => { setShowAddMoney(true); setAddMoneyResult(null); }}>
           <div className="w-5 h-5 rounded-full bg-purple-500 flex items-center justify-center"><svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg></div>
           <span className="text-xs font-semibold text-purple-400">Add Money</span>
         </button>
@@ -162,25 +194,33 @@ export default function App() {
           <svg className="w-5 h-5 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
         </div>
         <div className="bunq-card flex flex-col gap-1 p-2">
-          {transactions.slice(0, 5).map((t, i) => {
+          {transactions.slice(0, txLimit).map((t, i) => {
             const isExpense = t.amount.startsWith('-');
             const { icon, bg, text } = getIconForMerchant(t.merchant);
             return (
               <div key={i} className="flex items-center justify-between p-3 hover:bg-[#2C2C2E] rounded-lg transition">
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 min-w-0">
                   <div className={`w-10 h-10 rounded-full ${bg} ${text} flex items-center justify-center text-lg shrink-0`}>{icon}</div>
-                  <div>
-                    <p className="text-sm font-bold text-white">{t.merchant}</p>
-                    <p className="text-xs text-gray-400">{t.desc || t.date}</p>
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-white truncate">{t.merchant}</p>
+                    <p className="text-xs text-gray-400 truncate">{t.desc || t.date}</p>
                   </div>
                 </div>
-                <p className={`text-[16px] font-bold ${isExpense ? 'text-white' : 'text-blue-500'}`}>
-                  {isExpense ? '' : '+'}€ {t.amount.replace('-', '')}
+                <p className={`text-[15px] font-bold shrink-0 ml-2 ${isExpense ? 'text-white' : 'text-blue-500'}`}>
+                  {isExpense ? '-' : '+'}€{Math.abs(parseFloat(t.amount)).toFixed(2)}
                 </p>
               </div>
             );
           })}
           {transactions.length === 0 && <div className="p-4 text-center text-gray-500 text-sm">No recent transactions</div>}
+          {transactions.length > 5 && (
+            <button
+              onClick={() => setTxLimit(txLimit === 5 ? transactions.length : 5)}
+              className="w-full py-2.5 text-xs font-semibold text-blue-400 hover:text-blue-300 transition border-t border-gray-800 mt-1"
+            >
+              {txLimit === 5 ? `View all ${transactions.length} transactions` : 'Show less'}
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -403,6 +443,57 @@ export default function App() {
     ai: renderChat,
   };
 
+  const renderAddMoneyModal = () => (
+    <div className="fixed inset-0 z-[100] flex items-end justify-center" onClick={() => setShowAddMoney(false)}>
+      <div className="absolute inset-0 bg-black/60" />
+      <div className="relative w-full max-w-[430px] bg-[#1C1C1E] rounded-t-2xl p-6 pb-10" onClick={e => e.stopPropagation()}>
+        <div className="w-10 h-1 bg-gray-600 rounded-full mx-auto mb-5" />
+        <h2 className="text-lg font-bold text-white mb-1">Add Money</h2>
+        <p className="text-xs text-gray-400 mb-5">Sends a payment request to sugardaddy@bunq.com</p>
+
+        <label className="text-xs text-gray-400 mb-1 block">Amount (EUR)</label>
+        <div className="flex items-center bg-[#2C2C2E] rounded-xl px-4 py-3 mb-4">
+          <span className="text-gray-400 mr-2 text-lg">€</span>
+          <input
+            type="number"
+            min="0.01"
+            step="0.01"
+            placeholder="0.00"
+            value={addMoneyAmount}
+            onChange={e => setAddMoneyAmount(e.target.value)}
+            className="flex-1 bg-transparent outline-none text-white text-lg placeholder-gray-600"
+            autoFocus
+          />
+        </div>
+
+        <label className="text-xs text-gray-400 mb-1 block">Description</label>
+        <div className="flex items-center bg-[#2C2C2E] rounded-xl px-4 py-3 mb-6">
+          <input
+            type="text"
+            placeholder="Request money"
+            value={addMoneyDesc}
+            onChange={e => setAddMoneyDesc(e.target.value)}
+            className="flex-1 bg-transparent outline-none text-white text-sm placeholder-gray-600"
+          />
+        </div>
+
+        {addMoneyResult && (
+          <p className={`text-sm text-center mb-4 ${addMoneyResult.ok ? 'text-green-400' : 'text-red-400'}`}>
+            {addMoneyResult.ok ? '✓ ' : '✗ '}{addMoneyResult.msg}
+          </p>
+        )}
+
+        <button
+          onClick={handleAddMoney}
+          disabled={addMoneyLoading || !addMoneyAmount}
+          className="w-full py-3.5 rounded-xl bg-purple-600 text-white font-bold text-sm disabled:opacity-50 transition"
+        >
+          {addMoneyLoading ? 'Sending...' : 'Send Request'}
+        </button>
+      </div>
+    </div>
+  );
+
   return (
     <div className="flex items-center justify-center min-h-screen bg-gray-900">
       <div className="app-container">
@@ -427,6 +518,8 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      {showAddMoney && createPortal(renderAddMoneyModal(), document.body)}
     </div>
   );
 }
